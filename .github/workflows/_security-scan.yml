@@ -172,30 +172,19 @@ jobs:
       - name: SonarQube Scan
         id: sonar-scan
         if: inputs.scan_code
-        uses: SonarSource/sonarqube-scan-action@master
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        with:
-          projectBaseDir: .
-          args: >
-            -Dsonar.projectKey=${{ inputs.sonar_project_key || format('{0}-{1}', github.repository_owner, github.event.repository.name) }}
-            -Dsonar.projectName=${{ inputs.sonar_project_key || format('CloudInsight Frontend - {0}', github.event.repository.name) }}
-            -Dsonar.projectVersion=${{ github.sha }}
-            -Dsonar.sources=src
-            -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/*.test.*,**/*.spec.*,**/__tests__/**,**/coverage/**
-            -Dsonar.test.inclusions=**/*.test.*,**/*.spec.*,**/__tests__/**
-            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
-            -Dsonar.typescript.lcov.reportPaths=coverage/lcov.info
-            -Dsonar.testExecutionReportPaths=test-results/sonar-report.xml
 
       - name: Wait for SonarQube Quality Gate
         id: sonar-quality-gate
         if: ${{ inputs.scan_code && !inputs.skip_quality_gate }}
-        uses: SonarSource/sonarqube-quality-gate-action@master
+        uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: Check SonarQube Quality Gate Result
         id: quality-gate-check
