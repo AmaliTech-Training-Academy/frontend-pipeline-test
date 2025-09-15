@@ -97,24 +97,6 @@ jobs:
           echo "NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost}" >> $GITHUB_ENV
           echo "NEXT_PUBLIC_NODE_ENV=test" >> $GITHUB_ENV
 
-      - name: Lint check
-        id: lint
-        run: |
-          echo "Running ESLint..."
-          if grep -q '"lint"' package.json; then
-            if pnpm run lint; then
-              echo "status=passed" >> $GITHUB_OUTPUT
-              echo "✅ Lint check passed"
-            else
-              echo "status=failed" >> $GITHUB_OUTPUT
-              echo "❌ Lint check failed"
-              exit 1
-            fi
-          else
-            echo "status=skipped" >> $GITHUB_OUTPUT
-            echo "⚠️ No lint script found - skipping"
-          fi
-
       - name: Type check
         run: |
           echo "Running TypeScript type check..."
@@ -129,26 +111,33 @@ jobs:
             echo "⚠️ No tsconfig.json found - skipping type check"
           fi
 
-      - name: Prettier check
+      - name: ESLint format and code quality check
+        id: lint
         run: |
-          echo "Running Prettier format check..."
-          if grep -q '"prettier:check"' package.json; then
-            if pnpm run prettier:check; then
-              echo "✅ Prettier check passed"
+          echo "Running ESLint for linting and formatting..."
+          if grep -q '"lint"' package.json; then
+            if pnpm run lint; then
+              echo "status=passed" >> $GITHUB_OUTPUT
+              echo "✅ ESLint check passed"
             else
-              echo "❌ Code formatting issues found"
-              echo "💡 Run 'pnpm run prettier' to fix formatting"
+              echo "status=failed" >> $GITHUB_OUTPUT
+              echo "❌ ESLint issues found"
+              echo "💡 Run 'pnpm run lint:fix' to fix auto-fixable issues"
               exit 1
             fi
-          elif command -v prettier &> /dev/null; then
-            if pnpm exec prettier --check .; then
-              echo "✅ Prettier check passed"
+          elif command -v eslint &> /dev/null; then
+            if pnpm exec eslint . --ext .ts,.tsx,.js,.jsx; then
+              echo "status=passed" >> $GITHUB_OUTPUT
+              echo "✅ ESLint check passed"
             else
-              echo "❌ Code formatting issues found"
+              echo "status=failed" >> $GITHUB_OUTPUT
+              echo "❌ ESLint issues found"
+              echo "💡 Run 'pnpm exec eslint . --ext .ts,.tsx,.js,.jsx --fix' to fix auto-fixable issues"
               exit 1
             fi
           else
-            echo "⚠️ Prettier not found - skipping format check"
+            echo "status=skipped" >> $GITHUB_OUTPUT
+            echo "⚠️ ESLint not found - skipping format and lint check"
           fi
 
       - name: Unit tests
