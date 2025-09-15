@@ -55,18 +55,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js and pnpm
-        if: inputs.project_type == 'frontend'
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ inputs.node_version }}
-          cache: "pnpm"
-
       - name: Setup pnpm
         if: inputs.project_type == 'frontend'
         uses: pnpm/action-setup@v3
         with:
           version: ${{ inputs.pnpm_version }}
+          run_install: false
+
+      - name: Setup Node.js with pnpm cache
+        if: inputs.project_type == 'frontend'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: "pnpm"
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Decrypt environment variables
         id: decrypt-env
