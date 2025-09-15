@@ -142,7 +142,7 @@ jobs:
           exit-code: "0" # Don't fail the job
 
       - name: Upload Trivy scan results
-        if: ${{ inputs.scan_dependencies && always() }}
+        if: ${{ inputs.scan_dependencies && always() && hashFiles('trivy-results.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: "trivy-results.sarif"

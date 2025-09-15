@@ -70,64 +70,98 @@ jobs:
           echo "emoji=$EMOJI" >> $GITHUB_OUTPUT
           echo "title=$TITLE" >> $GITHUB_OUTPUT
 
+      - name: Prepare Slack payload
+        id: payload
+        run: |
+          # Build the fields array with conditional fields
+          FIELDS='[
+            {
+              "type": "mrkdwn",
+              "text": "*Repository:*\n${{ github.repository }}"
+            },
+            {
+              "type": "mrkdwn", 
+              "text": "*Branch:*\n${{ github.ref_name }}"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Stage:*\n${{ inputs.stage }}"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"
+            }'
+
+          # Add version field if provided
+          if [ -n "${{ inputs.version }}" ]; then
+            FIELDS="$FIELDS,{\"type\": \"mrkdwn\", \"text\": \"*Version:*\\n${{ inputs.version }}\"}"
+          fi
+
+          # Add image URI field if provided  
+          if [ -n "${{ inputs.image_uri }}" ]; then
+            FIELDS="$FIELDS,{\"type\": \"mrkdwn\", \"text\": \"*Image:*\\n\`${{ inputs.image_uri }}\`\"}"
+          fi
+
+          # Add SonarQube field if provided
+          if [ -n "${{ inputs.sonar_quality_gate }}" ]; then
+            case "${{ inputs.sonar_quality_gate }}" in
+              "PASSED") SONAR_TEXT="✅ Quality Gate Passed" ;;
+              "FAILED") SONAR_TEXT="❌ Quality Gate Failed" ;;
+              *) SONAR_TEXT="${{ inputs.sonar_quality_gate }}" ;;
+            esac
+            FIELDS="$FIELDS,{\"type\": \"mrkdwn\", \"text\": \"*SonarQube:*\\n$SONAR_TEXT\"}"
+          fi
+
+          FIELDS="$FIELDS]"
+
+          # Create the complete payload
+          PAYLOAD=$(cat << EOF
+          {
+            "attachments": [
+              {
+                "color": "${{ steps.details.outputs.color }}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "${{ steps.details.outputs.emoji }} ${{ steps.details.outputs.title }}"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": $FIELDS
+                  },
+                  {
+                    "type": "actions",
+                    "elements": [
+                      {
+                        "type": "button",
+                        "text": {
+                          "type": "plain_text",
+                          "text": "View Workflow Run"
+                        },
+                        "url": "${{ inputs.run_url }}"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          )
+
+          # Save payload to output (escape newlines)
+          echo "payload<<EOF" >> $GITHUB_OUTPUT
+          echo "$PAYLOAD" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Send Slack notification
         uses: 8398a7/action-slack@v3
         with:
           status: custom
-          custom_payload: |
-            {
-              "attachments": [
-                {
-                  "color": "${{ steps.details.outputs.color }}",
-                  "blocks": [
-                    {
-                      "type": "header",
-                      "text": {
-                        "type": "plain_text",
-                        "text": "${{ steps.details.outputs.emoji }} ${{ steps.details.outputs.title }}"
-                      }
-                    },
-                    {
-                      "type": "section",
-                      "fields": [
-                        {
-                          "type": "mrkdwn",
-                          "text": "*Repository:*\n${{ github.repository }}"
-                        },
-                        {
-                          "type": "mrkdwn",
-                          "text": "*Branch:*\n${{ github.ref_name }}"
-                        },
-                        {
-                          "type": "mrkdwn",
-                          "text": "*Stage:*\n${{ inputs.stage }}"
-                        },
-                        {
-                          "type": "mrkdwn",
-                          "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"
-                        }
-                        ${{ inputs.version && format(',{{\"type\": \"mrkdwn\", \"text\": \"*Version:*\\n{0}\"}}', inputs.version) || '' }}
-                        ${{ inputs.image_uri && format(',{{\"type\": \"mrkdwn\", \"text\": \"*Image:*\\n`{0}`\"}}', inputs.image_uri) || '' }}
-                        ${{ inputs.sonar_quality_gate && format(',{{\"type\": \"mrkdwn\", \"text\": \"*SonarQube:*\\n{0}\"}}', inputs.sonar_quality_gate == 'PASSED' && '✅ Quality Gate Passed' || inputs.sonar_quality_gate == 'FAILED' && '❌ Quality Gate Failed' || inputs.sonar_quality_gate) || '' }}
-                      ]
-                    },
-                    {
-                      "type": "actions",
-                      "elements": [
-                        {
-                          "type": "button",
-                          "text": {
-                            "type": "plain_text",
-                            "text": "View Workflow Run"
-                          },
-                          "url": "${{ inputs.run_url }}"
-                        }
-                      ]
-                    }
-                  ]
-                }
-              ]
-            }
+          custom_payload: ${{ steps.payload.outputs.payload }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 

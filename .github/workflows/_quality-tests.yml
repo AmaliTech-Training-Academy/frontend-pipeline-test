@@ -188,7 +188,13 @@ jobs:
             fi
             
             echo "percentage=$COVERAGE_PERCENT" >> $GITHUB_OUTPUT
+            
+            # Prominent coverage display
+            echo "==============================================="
+            echo "🎯 CODE COVERAGE ANALYSIS"
+            echo "==============================================="
             echo "📊 Coverage: ${COVERAGE_PERCENT}% ($COVERED_LINES/$TOTAL_LINES lines)"
+            echo "==============================================="
             
             # Check if coverage meets threshold
             THRESHOLD=${{ inputs.coverage_threshold }}
@@ -198,6 +204,7 @@ jobs:
               echo "❌ Coverage below threshold: $COVERAGE_PERCENT% < $THRESHOLD%"
               echo "::warning::Code coverage ($COVERAGE_PERCENT%) is below the required threshold ($THRESHOLD%)"
             fi
+            echo "==============================================="
           else
             echo "percentage=0" >> $GITHUB_OUTPUT
             echo "⚠️ No coverage data found"
@@ -206,6 +213,30 @@ jobs:
       - name: Test summary
         id: test-summary
         run: |
+          # Get coverage percentage from previous step
+          COVERAGE_PERCENT="${{ steps.coverage.outputs.percentage }}"
+          THRESHOLD=${{ inputs.coverage_threshold }}
+
+          # Create prominent summary header
+          echo "## 🧪 Quality Tests Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Coverage section with visual indicator
+          echo "### 📊 Code Coverage" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$COVERAGE_PERCENT" ] && [ "$COVERAGE_PERCENT" != "0" ]; then
+            if (( $(echo "$COVERAGE_PERCENT >= $THRESHOLD" | bc -l) )); then
+              echo "✅ **${COVERAGE_PERCENT}%** (Target: ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+              echo "> Coverage meets the required threshold" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ **${COVERAGE_PERCENT}%** (Target: ${THRESHOLD}%)" >> $GITHUB_STEP_SUMMARY
+              echo "> ⚠️ Coverage is below the required threshold" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "❌ **No coverage data available**" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Test results section
           if [ -f junit.xml ]; then
             TOTAL=$(grep -o 'tests="[0-9]\+"' junit.xml | head -1 | cut -d '"' -f2 || echo 0)
             FAILURES=$(grep -o 'failures="[0-9]\+"' junit.xml | head -1 | cut -d '"' -f2 || echo 0)
@@ -216,15 +247,18 @@ jobs:
             
             echo "test_results=total:$TOTAL,passed:$PASSED,failed:$FAILURES,errors:$ERRORS,skipped:$SKIPPED" >> $GITHUB_OUTPUT
             
-            echo "## 📊 Test Results" >> $GITHUB_STEP_SUMMARY
-            echo "- **Total Tests:** $TOTAL" >> $GITHUB_STEP_SUMMARY
-            echo "- **Passed:** $PASSED ✅" >> $GITHUB_STEP_SUMMARY
-            echo "- **Failed:** $FAILURES ❌" >> $GITHUB_STEP_SUMMARY
-            echo "- **Errors:** $ERRORS ⚠️" >> $GITHUB_STEP_SUMMARY
-            echo "- **Skipped:** $SKIPPED ⏭️" >> $GITHUB_STEP_SUMMARY
+            echo "### 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Tests** | $TOTAL | ℹ️ |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Passed** | $PASSED | ✅ |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Failed** | $FAILURES | ❌ |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Errors** | $ERRORS | ⚠️ |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Skipped** | $SKIPPED | ⏭️ |" >> $GITHUB_STEP_SUMMARY
           else
             echo "test_results=no_results" >> $GITHUB_OUTPUT
-            echo "⚠️ No test results found"
+            echo "### 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **No test results found**" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload test artifacts
@@ -237,15 +271,6 @@ jobs:
             coverage/
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Upload coverage to Codecov
-        if: ${{ always() && hashFiles('coverage/lcov.info') != '' }}
-        uses: codecov/codecov-action@v4
-        with:
-          file: coverage/lcov.info
-          fail_ci_if_error: false
-          flags: frontend
-          name: frontend-coverage
 
       - name: Annotate test results
         if: ${{ always() && hashFiles('junit.xml') != '' }}
