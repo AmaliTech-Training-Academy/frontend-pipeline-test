@@ -1,0 +1,89 @@
+name: CloudInsight Frontend CI/CD
+
+on:
+  push:
+    branches: ["*"]
+    paths-ignore:
+      - "**.md"
+      - "**.txt"
+      - ".gitignore"
+      - "docs/**"
+  pull_request:
+    branches: ["*"]
+    paths-ignore:
+      - "**.md"
+      - "**.txt"
+      - ".gitignore"
+      - "docs/**"
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: "Force version bump"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  checks: write
+  actions: read
+  security-events: write
+  packages: write
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-tests:
+    name: Quality & Tests
+    uses: ./.github/workflows/_quality-tests.yml
+    with:
+      node_version: "22.x"
+      pnpm_version: "9.0.0"
+    secrets: inherit
+
+  security-scan:
+    name: Security Scan
+    needs: [quality-tests]
+    if: ${{ !failure() && !cancelled() }}
+    uses: ./.github/workflows/_security-scan.yml
+    with:
+      project_type: "frontend"
+      scan_dependencies: true
+      scan_code: true
+      trivy_severity: "HIGH,CRITICAL"
+    secrets: inherit
+
+  build-image:
+    name: Build Container Image
+    needs: [quality-tests, security-scan]
+    if: ${{ !failure() && !cancelled() && needs.security-scan.outputs.sonar_quality_gate != 'FAILED' }}
+    uses: ./.github/workflows/_build-push.yml
+    with:
+      project_type: "frontend"
+      node_version: "22.x"
+      pnpm_version: "9.0.0"
+      build_only: true
+      push_secrets: true
+    secrets: inherit
+
+  version-and-push:
+    name: Version & Push to ECR
+    needs: [quality-tests, security-scan, build-image]
+    if: success() && needs.security-scan.outputs.sonar_quality_gate != 'FAILED'
+    uses: ./.github/workflows/_versioning.yml
+    secrets: inherit
+
+  notification:
+    name: Send Notifications
+    needs: [quality-tests, security-scan, build-image, version-and-push]
+    if: always()
+    uses: ./.github/workflows/_notification.yml
+    secrets: inherit
+    with:
+      status: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
+      stage: Pipeline Complete
+      version: ${{ needs.version-and-push.outputs.version }}
+      image_uri: ${{ needs.version-and-push.outputs.image_uri }}
+      sonar_quality_gate: ${{ needs.security-scan.outputs.sonar_quality_gate }}

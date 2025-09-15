@@ -1,0 +1,139 @@
+name: Notification Module
+
+on:
+  workflow_call:
+    inputs:
+      status:
+        description: "Pipeline status (success, failure, cancelled)"
+        required: true
+        type: string
+      stage:
+        description: "Stage that completed/failed"
+        required: true
+        type: string
+      version:
+        description: "Version created (if applicable)"
+        required: false
+        type: string
+      image_uri:
+        description: "Container image URI (if applicable)"
+        required: false
+        type: string
+      sonar_quality_gate:
+        description: "SonarQube quality gate status"
+        required: false
+        type: string
+      run_url:
+        description: "GitHub Actions run URL"
+        required: false
+        type: string
+        default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  slack-notification:
+    name: Slack Notification
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+
+    steps:
+      - name: Determine notification details
+        id: details
+        run: |
+          STATUS="${{ inputs.status }}"
+          STAGE="${{ inputs.stage }}"
+
+          case "$STATUS" in
+            success)
+              COLOR="good"
+              EMOJI="✅"
+              TITLE="Pipeline Successful"
+              ;;
+            failure)
+              COLOR="danger"
+              EMOJI="❌"
+              TITLE="Pipeline Failed"
+              ;;
+            cancelled)
+              COLOR="warning"
+              EMOJI="⚠️"
+              TITLE="Pipeline Cancelled"
+              ;;
+            *)
+              COLOR="#808080"
+              EMOJI="ℹ️"
+              TITLE="Pipeline Update"
+              ;;
+          esac
+
+          echo "color=$COLOR" >> $GITHUB_OUTPUT
+          echo "emoji=$EMOJI" >> $GITHUB_OUTPUT
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+
+      - name: Send Slack notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              "attachments": [
+                {
+                  "color": "${{ steps.details.outputs.color }}",
+                  "blocks": [
+                    {
+                      "type": "header",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "${{ steps.details.outputs.emoji }} ${{ steps.details.outputs.title }}"
+                      }
+                    },
+                    {
+                      "type": "section",
+                      "fields": [
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Repository:*\n${{ github.repository }}"
+                        },
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Branch:*\n${{ github.ref_name }}"
+                        },
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Stage:*\n${{ inputs.stage }}"
+                        },
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>"
+                        }
+                        ${{ inputs.version && format(',{{\"type\": \"mrkdwn\", \"text\": \"*Version:*\\n{0}\"}}', inputs.version) || '' }}
+                        ${{ inputs.image_uri && format(',{{\"type\": \"mrkdwn\", \"text\": \"*Image:*\\n`{0}`\"}}', inputs.image_uri) || '' }}
+                        ${{ inputs.sonar_quality_gate && format(',{{\"type\": \"mrkdwn\", \"text\": \"*SonarQube:*\\n{0}\"}}', inputs.sonar_quality_gate == 'PASSED' && '✅ Quality Gate Passed' || inputs.sonar_quality_gate == 'FAILED' && '❌ Quality Gate Failed' || inputs.sonar_quality_gate) || '' }}
+                      ]
+                    },
+                    {
+                      "type": "actions",
+                      "elements": [
+                        {
+                          "type": "button",
+                          "text": {
+                            "type": "plain_text",
+                            "text": "View Workflow Run"
+                          },
+                          "url": "${{ inputs.run_url }}"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Summary
+        run: |
+          echo "## 📢 Notification Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ inputs.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Stage:** ${{ inputs.stage }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Notification sent to:** Slack" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,268 @@
+name: Quality Tests Module
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: "Node.js version to use"
+        required: false
+        type: string
+        default: "22.x"
+      pnpm_version:
+        description: "pnpm version to use"
+        required: false
+        type: string
+        default: "9.0.0"
+      coverage_threshold:
+        description: "Coverage threshold percentage"
+        required: false
+        type: number
+        default: 80
+      run_e2e_tests:
+        description: "Run end-to-end tests"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      test_results:
+        description: "Test execution results"
+        value: ${{ jobs.quality-tests.outputs.test_results }}
+      coverage_percentage:
+        description: "Code coverage percentage"
+        value: ${{ jobs.quality-tests.outputs.coverage_percentage }}
+      lint_status:
+        description: "Lint check status"
+        value: ${{ jobs.quality-tests.outputs.lint_status }}
+
+permissions:
+  contents: read
+  checks: write
+  actions: read
+
+jobs:
+  quality-tests:
+    name: Quality Tests & Code Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      test_results: ${{ steps.test-summary.outputs.test_results }}
+      coverage_percentage: ${{ steps.coverage.outputs.percentage }}
+      lint_status: ${{ steps.lint.outputs.status }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ inputs.pnpm_version }}
+          run_install: false
+
+      - name: Setup Node.js with cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: "pnpm"
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile --prefer-offline
+          else
+            echo "No pnpm-lock.yaml found - performing non-frozen install"
+            pnpm install --prefer-offline
+          fi
+
+      - name: Prepare environment variables
+        run: |
+          echo "Setting up test environment variables..."
+          # Try to source from existing test env files
+          for candidate in .env.test .env.example .env; do
+            if [ -f "$candidate" ]; then
+              echo "Loading environment from $candidate"
+              grep '^NEXT_PUBLIC_' "$candidate" | while IFS='=' read -r k v; do
+                if [ -n "$k" ] && [ -n "$v" ]; then
+                  echo "$k=$v" >> $GITHUB_ENV
+                fi
+              done
+              break
+            fi
+          done
+
+          # Provide safe defaults
+          echo "NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost}" >> $GITHUB_ENV
+          echo "NEXT_PUBLIC_NODE_ENV=test" >> $GITHUB_ENV
+
+      - name: Lint check
+        id: lint
+        run: |
+          echo "Running ESLint..."
+          if grep -q '"lint"' package.json; then
+            if pnpm run lint; then
+              echo "status=passed" >> $GITHUB_OUTPUT
+              echo "✅ Lint check passed"
+            else
+              echo "status=failed" >> $GITHUB_OUTPUT
+              echo "❌ Lint check failed"
+              exit 1
+            fi
+          else
+            echo "status=skipped" >> $GITHUB_OUTPUT
+            echo "⚠️ No lint script found - skipping"
+          fi
+
+      - name: Type check
+        run: |
+          echo "Running TypeScript type check..."
+          if [ -f tsconfig.json ]; then
+            if pnpm exec tsc --noEmit --pretty; then
+              echo "✅ Type check passed"
+            else
+              echo "❌ Type check failed"
+              exit 1
+            fi
+          else
+            echo "⚠️ No tsconfig.json found - skipping type check"
+          fi
+
+      - name: Prettier check
+        run: |
+          echo "Running Prettier format check..."
+          if grep -q '"prettier:check"' package.json; then
+            if pnpm run prettier:check; then
+              echo "✅ Prettier check passed"
+            else
+              echo "❌ Code formatting issues found"
+              echo "💡 Run 'pnpm run prettier' to fix formatting"
+              exit 1
+            fi
+          elif command -v prettier &> /dev/null; then
+            if pnpm exec prettier --check .; then
+              echo "✅ Prettier check passed"
+            else
+              echo "❌ Code formatting issues found"
+              exit 1
+            fi
+          else
+            echo "⚠️ Prettier not found - skipping format check"
+          fi
+
+      - name: Unit tests
+        run: |
+          echo "Running unit tests with coverage..."
+          if grep -q 'vitest' package.json; then
+            pnpm exec vitest run \
+              --reporter=default \
+              --reporter=junit \
+              --outputFile=junit.xml \
+              --coverage \
+              --coverage.reporter=lcov \
+              --coverage.reporter=html \
+              --coverage.reporter=text-summary
+          elif grep -q '"test"' package.json; then
+            echo "Running generic test script..."
+            pnpm test
+          else
+            echo "⚠️ No test framework detected - skipping tests"
+          fi
+
+      - name: E2E tests
+        if: ${{ inputs.run_e2e_tests }}
+        run: |
+          echo "Running end-to-end tests..."
+          if grep -q '"test:e2e"' package.json; then
+            pnpm run test:e2e
+          elif grep -q 'playwright' package.json; then
+            pnpm exec playwright test
+          elif grep -q 'cypress' package.json; then
+            pnpm exec cypress run
+          else
+            echo "⚠️ No E2E test framework found - skipping E2E tests"
+          fi
+
+      - name: Coverage analysis
+        id: coverage
+        run: |
+          if [ -f coverage/lcov.info ]; then
+            # Calculate coverage percentage
+            COVERED_LINES=$(grep '^DA:' coverage/lcov.info | awk -F'[,:]' '$3>0{c++} END{print c+0}')
+            TOTAL_LINES=$(grep '^DA:' coverage/lcov.info | wc -l | awk '{print $1+0}')
+            
+            if [ "$TOTAL_LINES" -gt 0 ]; then
+              COVERAGE_PERCENT=$(awk -v c=$COVERED_LINES -v t=$TOTAL_LINES 'BEGIN{printf("%.2f", (c/t)*100)}')
+            else
+              COVERAGE_PERCENT=0
+            fi
+            
+            echo "percentage=$COVERAGE_PERCENT" >> $GITHUB_OUTPUT
+            echo "📊 Coverage: ${COVERAGE_PERCENT}% ($COVERED_LINES/$TOTAL_LINES lines)"
+            
+            # Check if coverage meets threshold
+            THRESHOLD=${{ inputs.coverage_threshold }}
+            if (( $(echo "$COVERAGE_PERCENT >= $THRESHOLD" | bc -l) )); then
+              echo "✅ Coverage meets threshold ($THRESHOLD%)"
+            else
+              echo "❌ Coverage below threshold: $COVERAGE_PERCENT% < $THRESHOLD%"
+              echo "::warning::Code coverage ($COVERAGE_PERCENT%) is below the required threshold ($THRESHOLD%)"
+            fi
+          else
+            echo "percentage=0" >> $GITHUB_OUTPUT
+            echo "⚠️ No coverage data found"
+          fi
+
+      - name: Test summary
+        id: test-summary
+        run: |
+          if [ -f junit.xml ]; then
+            TOTAL=$(grep -o 'tests="[0-9]\+"' junit.xml | head -1 | cut -d '"' -f2 || echo 0)
+            FAILURES=$(grep -o 'failures="[0-9]\+"' junit.xml | head -1 | cut -d '"' -f2 || echo 0)
+            ERRORS=$(grep -o 'errors="[0-9]\+"' junit.xml | head -1 | cut -d '"' -f2 || echo 0)
+            SKIPPED=$(grep -o 'skipped="[0-9]\+"' junit.xml | head -1 | cut -d '"' -f2 || echo 0)
+            
+            PASSED=$((TOTAL - FAILURES - ERRORS - SKIPPED))
+            
+            echo "test_results=total:$TOTAL,passed:$PASSED,failed:$FAILURES,errors:$ERRORS,skipped:$SKIPPED" >> $GITHUB_OUTPUT
+            
+            echo "## 📊 Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "- **Total Tests:** $TOTAL" >> $GITHUB_STEP_SUMMARY
+            echo "- **Passed:** $PASSED ✅" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failed:** $FAILURES ❌" >> $GITHUB_STEP_SUMMARY
+            echo "- **Errors:** $ERRORS ⚠️" >> $GITHUB_STEP_SUMMARY
+            echo "- **Skipped:** $SKIPPED ⏭️" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "test_results=no_results" >> $GITHUB_OUTPUT
+            echo "⚠️ No test results found"
+          fi
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            junit.xml
+            coverage/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage/lcov.info') != ''
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage/lcov.info
+          fail_ci_if_error: false
+          flags: frontend
+          name: frontend-coverage
+
+      - name: Annotate test results
+        if: always() && hashFiles('junit.xml') != ''
+        uses: dorny/test-reporter@v1
+        with:
+          name: Frontend Unit Tests
+          path: junit.xml
+          reporter: jest-junit
+          fail-on-error: false

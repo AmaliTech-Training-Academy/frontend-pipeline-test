@@ -1,0 +1,339 @@
+name: Security Scanning Module
+
+on:
+  workflow_call:
+    inputs:
+      project_type:
+        description: "Type of project (frontend or backend)"
+        required: true
+        type: string
+      scan_dependencies:
+        description: "Scan dependencies for vulnerabilities"
+        required: false
+        type: boolean
+        default: true
+      scan_code:
+        description: "Run static code analysis"
+        required: false
+        type: boolean
+        default: true
+      trivy_severity:
+        description: "Trivy severity threshold"
+        required: false
+        type: string
+        default: "HIGH,CRITICAL"
+      sonar_project_key:
+        description: "SonarQube project key override"
+        required: false
+        type: string
+      skip_quality_gate:
+        description: "Skip SonarQube quality gate check"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      dependency_scan_results:
+        description: "Dependency scan results"
+        value: ${{ jobs.security-scan.outputs.dependency_scan_results }}
+      sonar_quality_gate:
+        description: "SonarQube quality gate status"
+        value: ${{ jobs.security-scan.outputs.sonar_quality_gate }}
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  security-scan:
+    name: Security Scanning & Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      dependency_scan_results: ${{ steps.dependency-scan.outputs.results }}
+      sonar_quality_gate: ${{ steps.final-quality-gate.outputs.quality_gate }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for SonarQube
+
+      - name: Setup Node.js (for frontend)
+        if: inputs.project_type == 'frontend'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "pnpm"
+
+      - name: Setup pnpm (for frontend)
+        if: inputs.project_type == 'frontend'
+        uses: pnpm/action-setup@v3
+        with:
+          version: "9.0.0"
+
+      - name: Install dependencies (for frontend)
+        if: inputs.project_type == 'frontend'
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pnpm install --frozen-lockfile --prefer-offline
+          else
+            pnpm install --prefer-offline
+          fi
+
+      # Dependency Vulnerability Scanning
+      - name: Dependency vulnerability scan
+        id: dependency-scan
+        if: inputs.scan_dependencies
+        run: |
+          echo "🔍 Scanning dependencies for vulnerabilities..."
+
+          # npm audit for Node.js projects
+          if [ "${{ inputs.project_type }}" == "frontend" ] && [ -f package.json ]; then
+            echo "Running npm audit..."
+            if pnpm audit --audit-level moderate --json > audit-results.json 2>/dev/null; then
+              echo "results=passed" >> $GITHUB_OUTPUT
+              echo "✅ No significant vulnerabilities found"
+            else
+              echo "results=failed" >> $GITHUB_OUTPUT
+              echo "❌ Vulnerabilities found in dependencies"
+              echo "📋 Audit results:"
+              cat audit-results.json | jq -r '.advisories // {} | to_entries[] | "- \(.value.title) (\(.value.severity))"' || echo "Failed to parse audit results"
+              
+              # Create GitHub Security Advisory
+              if command -v gh &> /dev/null && [ -n "${{ github.token }}" ]; then
+                echo "Creating security advisory..."
+                # gh api repos/${{ github.repository }}/security-advisories --input audit-results.json || true
+              fi
+            fi
+          fi
+
+          # OWASP Dependency Check
+          echo "Running OWASP Dependency Check..."
+          docker run --rm -v "$(pwd)":/src \
+            owasp/dependency-check:latest \
+            --scan /src \
+            --format JSON \
+            --format HTML \
+            --out /src/dependency-check-reports \
+            --suppression /src/.dependency-check-suppressions.xml 2>/dev/null || true
+
+          if [ -d dependency-check-reports ]; then
+            echo "📊 OWASP Dependency Check completed"
+            if [ -f dependency-check-reports/dependency-check-report.json ]; then
+              VULNERABILITIES=$(cat dependency-check-reports/dependency-check-report.json | jq '.dependencies[].vulnerabilities // [] | length' | awk '{sum+=$1} END {print sum+0}')
+              echo "Found $VULNERABILITIES vulnerabilities"
+              if [ "$VULNERABILITIES" -gt 0 ]; then
+                echo "::warning::Found $VULNERABILITIES vulnerabilities in dependencies"
+              fi
+            fi
+          fi
+
+      # Trivy Security Scanner
+      - name: Run Trivy vulnerability scanner
+        if: inputs.scan_dependencies
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: ${{ inputs.trivy_severity }}
+          exit-code: "0" # Don't fail the job
+
+      - name: Upload Trivy scan results
+        if: inputs.scan_dependencies && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      # CodeQL Analysis
+      - name: Initialize CodeQL
+        if: inputs.scan_code
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.project_type == 'frontend' && 'javascript' || 'java' }}
+          queries: security-extended,quality
+
+      - name: Autobuild
+        if: inputs.scan_code
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        if: inputs.scan_code
+        id: code-scan
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ inputs.project_type == 'frontend' && 'javascript' || 'java' }}"
+
+      # SonarQube Analysis
+      - name: SonarQube Scan
+        id: sonar-scan
+        if: inputs.scan_code
+        uses: SonarSource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONARQUBE_URL }}
+        with:
+          projectBaseDir: .
+          args: >
+            -Dsonar.projectKey=${{ inputs.sonar_project_key || format('{0}-{1}', github.repository_owner, github.event.repository.name) }}
+            -Dsonar.projectName=${{ inputs.sonar_project_key || format('CloudInsight Frontend - {0}', github.event.repository.name) }}
+            -Dsonar.projectVersion=${{ github.sha }}
+            -Dsonar.sources=src
+            -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/*.test.*,**/*.spec.*,**/__tests__/**,**/coverage/**
+            -Dsonar.test.inclusions=**/*.test.*,**/*.spec.*,**/__tests__/**
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.typescript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.testExecutionReportPaths=test-results/sonar-report.xml
+
+      - name: Wait for SonarQube Quality Gate
+        id: sonar-quality-gate
+        if: inputs.scan_code && !inputs.skip_quality_gate
+        uses: SonarSource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+
+      - name: Check SonarQube Quality Gate Result
+        id: quality-gate-check
+        if: inputs.scan_code && !inputs.skip_quality_gate
+        run: |
+          echo "SonarQube Quality Gate Status: ${{ steps.sonar-quality-gate.outputs.quality-gate-status }}"
+          if [ "${{ steps.sonar-quality-gate.outputs.quality-gate-status }}" = "FAILED" ]; then
+            echo "::error::SonarQube Quality Gate failed!"
+            echo "quality_gate=FAILED" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "::notice::SonarQube Quality Gate passed!"
+            echo "quality_gate=PASSED" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set quality gate status for skipped scans
+        id: quality-gate-skipped
+        if: ${{ !inputs.scan_code || inputs.skip_quality_gate }}
+        run: |
+          echo "::notice::SonarQube Quality Gate skipped"
+          echo "quality_gate=SKIPPED" >> $GITHUB_OUTPUT
+
+      # Semgrep Static Analysis
+      - name: Semgrep Static Analysis
+        if: inputs.scan_code
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/owasp-top-ten
+            p/javascript
+
+      - name: Upload Semgrep results
+        if: inputs.scan_code && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+      # ESLint Security Rules (for frontend)
+      - name: ESLint Security Scan
+        if: inputs.project_type == 'frontend' && inputs.scan_code
+        run: |
+          echo "🔍 Running ESLint security scan..."
+
+          # Install eslint security plugins if not present
+          if ! grep -q "eslint-plugin-security" package.json; then
+            echo "Installing ESLint security plugins..."
+            pnpm add -D eslint-plugin-security eslint-plugin-node-security
+          fi
+
+          # Run ESLint with security rules
+          pnpm exec eslint . \
+            --ext .js,.jsx,.ts,.tsx \
+            --format json \
+            --output-file eslint-security-results.json \
+            --config '{"extends": ["plugin:security/recommended", "plugin:node-security/recommended"]}' \
+            || true
+
+          if [ -f eslint-security-results.json ]; then
+            SECURITY_ISSUES=$(cat eslint-security-results.json | jq '[.[].messages[] | select(.ruleId | test("security|node-security"))] | length')
+            echo "Found $SECURITY_ISSUES security-related ESLint issues"
+            if [ "$SECURITY_ISSUES" -gt 0 ]; then
+              echo "::warning::Found $SECURITY_ISSUES security-related code issues"
+              echo "📋 Security issues found:"
+              cat eslint-security-results.json | jq -r '.[].messages[] | select(.ruleId | test("security|node-security")) | "- \(.ruleId): \(.message)"'
+            fi
+          fi
+
+      # Docker Image Security Scan (if Dockerfile exists)
+      - name: Docker image security scan
+        if: hashFiles('Dockerfile') != ''
+        run: |
+          echo "🔍 Scanning Docker image for vulnerabilities..."
+
+          # Build image first
+          docker build -t security-scan-image .
+
+          # Scan with Trivy
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+            --format json \
+            --output /tmp/trivy-image-results.json \
+            --severity HIGH,CRITICAL \
+            security-scan-image || true
+
+          # Scan with Grype
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            anchore/grype:latest \
+            security-scan-image \
+            -o json \
+            > grype-image-results.json || true
+
+      # Security Summary
+      - name: Security scan summary
+        if: always()
+        run: |
+          echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f audit-results.json ]; then
+            echo "### Dependency Vulnerabilities" >> $GITHUB_STEP_SUMMARY
+            AUDIT_VULNS=$(cat audit-results.json | jq '.vulnerabilities // 0')
+            echo "- **npm audit:** $AUDIT_VULNS vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -f trivy-results.sarif ]; then
+            echo "### Trivy Scan Results" >> $GITHUB_STEP_SUMMARY
+            TRIVY_ISSUES=$(cat trivy-results.sarif | jq '.runs[0].results | length')
+            echo "- **Trivy:** $TRIVY_ISSUES issues found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -f eslint-security-results.json ]; then
+            echo "### Code Security Issues" >> $GITHUB_STEP_SUMMARY
+            ESLINT_SECURITY=$(cat eslint-security-results.json | jq '[.[].messages[] | select(.ruleId | test("security|node-security"))] | length')
+            echo "- **ESLint Security:** $ESLINT_SECURITY issues found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Upload Security Artifacts
+      - name: Upload security scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-results-${{ github.run_id }}
+          path: |
+            audit-results.json
+            dependency-check-reports/
+            trivy-results.sarif
+            semgrep.sarif
+            eslint-security-results.json
+            grype-image-results.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Consolidate Quality Gate Status
+        id: final-quality-gate
+        if: always()
+        run: |
+          if [[ "${{ steps.quality-gate-check.outputs.quality_gate }}" != "" ]]; then
+            echo "quality_gate=${{ steps.quality-gate-check.outputs.quality_gate }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ steps.quality-gate-skipped.outputs.quality_gate }}" != "" ]]; then
+            echo "quality_gate=${{ steps.quality-gate-skipped.outputs.quality_gate }}" >> $GITHUB_OUTPUT
+          else
+            echo "quality_gate=SKIPPED" >> $GITHUB_OUTPUT
+          fi

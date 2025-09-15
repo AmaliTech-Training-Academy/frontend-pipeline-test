@@ -1,0 +1,326 @@
+name: Build and Push Module
+
+on:
+  workflow_call:
+    inputs:
+      project_type:
+        description: "Type of project (frontend or backend)"
+        required: true
+        type: string
+      node_version:
+        description: "Node.js version to use"
+        required: false
+        type: string
+        default: "22.x"
+      pnpm_version:
+        description: "pnpm version to use"
+        required: false
+        type: string
+        default: "9.0.0"
+      build_only:
+        description: "Only build the image, do not push"
+        required: false
+        type: boolean
+        default: false
+      push_secrets:
+        description: "Push decrypted secrets to AWS Secrets Manager"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      image_id:
+        description: "Built image ID"
+        value: ${{ jobs.build-push.outputs.image_id }}
+      image_tag:
+        description: "Image tag without registry"
+        value: ${{ jobs.build-push.outputs.image_tag }}
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  build-push:
+    name: Build Container Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ github.ref == 'refs/heads/production' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'development' }}
+    outputs:
+      image_id: ${{ steps.build.outputs.imageid }}
+      image_tag: cloudinsight-frontend:${{ github.sha }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js and pnpm
+        if: inputs.project_type == 'frontend'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: "pnpm"
+
+      - name: Setup pnpm
+        if: inputs.project_type == 'frontend'
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - name: Decrypt environment variables
+        id: decrypt-env
+        run: |
+          echo "🔍 Checking for encrypted environment files..."
+
+          # Setup cleanup trap for any exit (success or failure)
+          cleanup() {
+            echo "🧹 Performing security cleanup..."
+            rm -f ./team-private-key.pem ./temp-aes-key ./.env ./next-public-build-args.txt
+            echo "✅ Security cleanup completed"
+          }
+          trap cleanup EXIT
+
+          # Find encrypted files in repository root
+          ENCRYPTED_DATA=$(find . -maxdepth 1 -name "encrypted-env-vars.enc" -type f | head -1)
+          ENCRYPTED_KEY=$(find . -maxdepth 1 -name "encrypted-aes-key.enc" -type f | head -1)
+          METADATA=$(find . -maxdepth 1 -name "encrypted-env-vars.meta" -type f | head -1)
+
+          if [[ -z "$ENCRYPTED_DATA" || -z "$ENCRYPTED_KEY" ]]; then
+            echo "ℹ️ No encrypted environment files found - continuing without decryption"
+            echo "has_encrypted_env=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "✅ Found encrypted files:"
+          echo "  Data: $ENCRYPTED_DATA"
+          echo "  Key: $ENCRYPTED_KEY"
+          if [[ -n "$METADATA" ]]; then
+            echo "  Metadata: $METADATA"
+          fi
+          echo "has_encrypted_env=true" >> $GITHUB_OUTPUT
+
+          # Create private key from secret
+          echo "🔑 Setting up private key for decryption..."
+          echo "${{ secrets.TEAM_PRIVATE_KEY }}" > ./team-private-key.pem
+          chmod 600 ./team-private-key.pem
+
+          # Verify private key
+          if ! openssl rsa -in ./team-private-key.pem -check -noout; then
+            echo "❌ Invalid private key in TEAM_PRIVATE_KEY secret"
+            exit 1
+          fi
+          echo "✅ Private key validated"
+
+          # Show metadata if available (without sensitive content)
+          if [[ -n "$METADATA" && -f "$METADATA" ]]; then
+            echo "📋 Encryption Metadata:"
+            echo "======================="
+            cat "$METADATA"
+            echo "======================="
+          fi
+
+          # Decrypt AES key
+          echo "🔓 Decrypting AES key..."
+          if ! openssl rsautl -decrypt \
+            -inkey ./team-private-key.pem \
+            -in "$ENCRYPTED_KEY" \
+            -out ./temp-aes-key; then
+            echo "❌ Failed to decrypt AES key"
+            exit 1
+          fi
+
+          # Read AES key
+          AES_KEY=$(cat ./temp-aes-key)
+
+          # Decrypt data (try GCM first, then CBC)
+          echo "🔓 Decrypting environment data..."
+          if openssl enc -aes-256-gcm -d \
+            -in "$ENCRYPTED_DATA" \
+            -out "./.env" \
+            -pass "pass:$AES_KEY" 2>/dev/null; then
+            echo "✅ Decrypted with AES-GCM"
+          elif openssl enc -aes-256-cbc -d \
+            -in "$ENCRYPTED_DATA" \
+            -out "./.env" \
+            -pass "pass:$AES_KEY" 2>/dev/null; then
+            echo "✅ Decrypted with AES-CBC"
+          else
+            echo "❌ Decryption failed with both AES-GCM and AES-CBC"
+            exit 1
+          fi
+
+          # Verify decrypted content (without exposing content)
+          if [[ -f "./.env" ]]; then
+            LINES=$(wc -l < "./.env")
+            SIZE=$(stat -c%s "./.env")
+            echo "✅ Decryption completed successfully!"
+            echo "📋 Decrypted .env file: $LINES lines, $SIZE bytes"
+            echo "⚠️ Environment variables are available for build process only"
+            
+            # Ensure .env is not tracked by git
+            git add .gitignore 2>/dev/null || true
+          else
+            echo "❌ Decryption produced no output file"
+            exit 1
+          fi
+
+      - name: Extract NEXT_PUBLIC environment variables
+        id: extract-env
+        if: steps.decrypt-env.outputs.has_encrypted_env == 'true'
+        run: |
+          echo "🔍 Extracting NEXT_PUBLIC_* environment variables..."
+
+          if [[ ! -f "./.env" ]]; then
+            exit 0
+          fi
+
+          # Extract NEXT_PUBLIC_* variables (without exposing values in logs)
+          NEXT_PUBLIC_VARS=$(grep '^NEXT_PUBLIC_' ./.env 2>/dev/null || true)
+
+          if [[ -z "$NEXT_PUBLIC_VARS" ]]; then
+            echo "ℹ️ No NEXT_PUBLIC_* variables found"
+            echo "has_next_public_vars=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Count variables found (without showing values)
+          VAR_COUNT=$(echo "$NEXT_PUBLIC_VARS" | wc -l)
+          echo "✅ Found $VAR_COUNT NEXT_PUBLIC_* environment variables"
+          echo "has_next_public_vars=true" >> $GITHUB_OUTPUT
+
+          # Mask sensitive values in logs
+          echo "$NEXT_PUBLIC_VARS" | while IFS='=' read -r key value; do
+            if [[ -n "$value" ]]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+          # Save build args to output file (will be masked)
+          echo "$NEXT_PUBLIC_VARS" > ./next-public-build-args.txt
+
+          echo "🔒 Environment variables prepared for Docker build (values masked in logs)"
+
+      - name: Push secrets to AWS Secrets Manager
+        if: inputs.push_secrets && steps.decrypt-env.outputs.has_encrypted_env == 'true'
+        run: |
+          echo "🔐 Pushing secrets to AWS Secrets Manager..."
+
+          if [[ ! -f "./.env" ]]; then
+            echo "⚠️ No .env file found - skipping secrets push"
+            exit 0
+          fi
+
+          # Use environment-scoped secret name (no suffix needed)
+          SECRET_NAME="${{ secrets.AWS_SECRETS_MANAGER_SECRET_NAME }}"
+
+          if [[ -z "$SECRET_NAME" ]]; then
+            echo "❌ AWS_SECRETS_MANAGER_SECRET_NAME environment secret not configured"
+            exit 1
+          fi
+
+          echo "🌍 Target Environment: ${{ github.ref }}"
+          echo "🔐 Secret Name: $SECRET_NAME"
+
+          # Create JSON from .env file
+          echo "📝 Creating JSON from .env file..."
+          JSON_SECRETS=$(cat ./.env | grep -v '^#' | grep '=' | while IFS='=' read -r key value; do
+            if [[ -n "$key" && -n "$value" ]]; then
+              echo "\"$key\": \"$value\","
+            fi
+          done | sed '$ s/,$//')
+
+          NEW_SECRET_JSON="{$JSON_SECRETS}"
+
+          # Implement merge strategy
+          if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" >/dev/null 2>&1; then
+            echo "📄 Secret exists: $SECRET_NAME"
+            echo "🔄 Implementing merge strategy..."
+            
+            # Get existing secret
+            EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --query SecretString --output text)
+            
+            # Merge existing and new secrets using jq
+            MERGED_SECRET=$(echo "$EXISTING_SECRET" | jq --argjson new "$NEW_SECRET_JSON" '. + $new')
+            
+            echo "✅ Updating secret with merged values..."
+            aws secretsmanager update-secret \
+              --secret-id "$SECRET_NAME" \
+              --secret-string "$MERGED_SECRET"
+              
+            echo "📊 Merged secret successfully - existing values preserved, new/updated values applied"
+          else
+            echo "🆕 Creating new secret: $SECRET_NAME"
+            aws secretsmanager create-secret \
+              --name "$SECRET_NAME" \
+              --description "Environment variables for CloudInsight Frontend" \
+              --secret-string "$NEW_SECRET_JSON" \
+              --secret-type "Other"
+              
+            echo "✅ New secret created with 'Other type of secret' configuration"
+          fi
+
+          echo "🎯 Secrets deployment completed for: $SECRET_NAME"
+
+      - name: Configure AWS credentials
+        if: inputs.push_secrets || !inputs.build_only
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: !inputs.build_only
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: Build Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: cloudinsight-frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            ${{ steps.extract-env.outputs.has_next_public_vars == 'true' && 
+                format('BUILDTIME_ENV_FILE={0}', 'next-public-build-args.txt') || '' }}
+            NODE_ENV=production
+            COMMIT_SHA=${{ github.sha }}
+
+      - name: Run Trivy vulnerability scanner on image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: cloudinsight-frontend:${{ github.sha }}
+          format: "sarif"
+          output: "trivy-image-results.sarif"
+
+      - name: Upload Trivy scan results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "trivy-image-results.sarif"
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## 🐳 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project Type:** ${{ inputs.project_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag:** cloudinsight-frontend:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Only:** ${{ inputs.build_only }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Push Secrets:** ${{ inputs.push_secrets }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.build.outcome }}" == "success" ]; then
+            echo "- **Status:** ✅ Build successful" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Status:** ❌ Build failed" >> $GITHUB_STEP_SUMMARY
+          fi
