@@ -29,6 +29,7 @@ permissions:
   actions: read
   security-events: write
   packages: write
+  id-token: write
 
 concurrency:
   group: frontend-ci-${{ github.ref }}
