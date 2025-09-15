@@ -1,0 +1,11 @@
+{
+  "encrypted_at": "2025-09-10T14:24:50Z",
+  "developer": "Developer: princoo <princeineza@gmail.com>",
+  "original_file": ".env.production",
+  "original_hash": "edf8987081a4aadb9358b1e4d5016f3efbe1ac0edc7493c5bc37145afab53b58",
+  "encryption_method": "RSA-4096 + AES-256",
+  "files": {
+    "data": "encrypted-env-vars.enc",
+    "key": "encrypted-aes-key.enc"
+  }
+}
