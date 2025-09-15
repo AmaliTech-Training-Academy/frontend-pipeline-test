@@ -172,7 +172,7 @@ jobs:
       - name: SonarQube Scan
         id: sonar-scan
         if: inputs.scan_code
-        uses: SonarSource/sonarqube-scan-action@master
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
