@@ -93,7 +93,7 @@ jobs:
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Update package.json
-        if: hashFiles('package.json') != ''
+        if: ${{ hashFiles('package.json') != '' }}
         run: |
           if command -v jq >/dev/null 2>&1; then
             jq --arg version "${{ steps.version.outputs.new_version }}" '.version = $version' package.json > package.json.tmp
@@ -101,7 +101,7 @@ jobs:
           fi
 
       - name: Commit version changes
-        if: hashFiles('package.json') != ''
+        if: ${{ hashFiles('package.json') != '' }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"

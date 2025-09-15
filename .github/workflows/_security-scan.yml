@@ -142,7 +142,7 @@ jobs:
           exit-code: "0" # Don't fail the job
 
       - name: Upload Trivy scan results
-        if: inputs.scan_dependencies && always()
+        if: ${{ inputs.scan_dependencies && always() }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: "trivy-results.sarif"
@@ -189,7 +189,7 @@ jobs:
 
       - name: Wait for SonarQube Quality Gate
         id: sonar-quality-gate
-        if: inputs.scan_code && !inputs.skip_quality_gate
+        if: ${{ inputs.scan_code && !inputs.skip_quality_gate }}
         uses: SonarSource/sonarqube-quality-gate-action@master
         timeout-minutes: 5
         env:
@@ -197,7 +197,7 @@ jobs:
 
       - name: Check SonarQube Quality Gate Result
         id: quality-gate-check
-        if: inputs.scan_code && !inputs.skip_quality_gate
+        if: ${{ inputs.scan_code && !inputs.skip_quality_gate }}
         run: |
           echo "SonarQube Quality Gate Status: ${{ steps.sonar-quality-gate.outputs.quality-gate-status }}"
           if [ "${{ steps.sonar-quality-gate.outputs.quality-gate-status }}" = "FAILED" ]; then
@@ -227,14 +227,14 @@ jobs:
             p/javascript
 
       - name: Upload Semgrep results
-        if: inputs.scan_code && always()
+        if: ${{ inputs.scan_code && always() }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
 
       # ESLint Security Rules (for frontend)
       - name: ESLint Security Scan
-        if: inputs.project_type == 'frontend' && inputs.scan_code
+        if: ${{ inputs.project_type == 'frontend' && inputs.scan_code }}
         run: |
           echo "🔍 Running ESLint security scan..."
 
@@ -264,7 +264,7 @@ jobs:
 
       # Docker Image Security Scan (if Dockerfile exists)
       - name: Docker image security scan
-        if: hashFiles('Dockerfile') != ''
+        if: ${{ hashFiles('Dockerfile') != '' }}
         run: |
           echo "🔍 Scanning Docker image for vulnerabilities..."
 

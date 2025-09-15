@@ -71,7 +71,7 @@ jobs:
   version-and-push:
     name: Version & Push to ECR
     needs: [quality-tests, security-scan, build-image]
-    if: success() && needs.security-scan.outputs.sonar_quality_gate != 'FAILED'
+    if: ${{ success() && needs.security-scan.outputs.sonar_quality_gate != 'FAILED' }}
     uses: ./.github/workflows/_versioning.yml
     secrets: inherit
 

@@ -250,7 +250,7 @@ jobs:
           retention-days: 7
 
       - name: Upload coverage to Codecov
-        if: always() && hashFiles('coverage/lcov.info') != ''
+        if: ${{ always() && hashFiles('coverage/lcov.info') != '' }}
         uses: codecov/codecov-action@v4
         with:
           file: coverage/lcov.info
@@ -259,7 +259,7 @@ jobs:
           name: frontend-coverage
 
       - name: Annotate test results
-        if: always() && hashFiles('junit.xml') != ''
+        if: ${{ always() && hashFiles('junit.xml') != '' }}
         uses: dorny/test-reporter@v1
         with:
           name: Frontend Unit Tests
