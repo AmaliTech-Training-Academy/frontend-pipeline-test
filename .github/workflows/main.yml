@@ -52,7 +52,7 @@ jobs:
       project_type: "frontend"
       scan_dependencies: true
       scan_code: true
-      trivy_severity: "HIGH,CRITICAL"
+      trivy_severity: "MEDIUM,HIGH,CRITICAL"
     secrets: inherit
 
   build-image:
