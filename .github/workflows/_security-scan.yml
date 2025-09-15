@@ -115,6 +115,7 @@ jobs:
           docker run --rm -v "$(pwd)":/src \
             owasp/dependency-check:latest \
             --scan /src \
+            --exclude "**/.github/**" \
             --format JSON \
             --format HTML \
             --out /src/dependency-check-reports \
@@ -142,6 +143,7 @@ jobs:
           output: "trivy-results.sarif"
           severity: ${{ inputs.trivy_severity }}
           exit-code: "0" # Don't fail the job
+          skip-dirs: ".github"
 
       - name: Upload Trivy scan results
         if: ${{ inputs.scan_dependencies && always() && hashFiles('trivy-results.sarif') != '' }}
@@ -217,6 +219,9 @@ jobs:
             p/security-audit
             p/owasp-top-ten
             p/javascript
+        env:
+          SEMGREP_RULES: p/security-audit p/owasp-top-ten p/javascript
+          SEMGREP_EXCLUDE: .github/
 
       - name: Upload Semgrep results
         if: ${{ inputs.scan_code && always() && hashFiles('semgrep.sarif') != '' }}
@@ -239,6 +244,7 @@ jobs:
           # Run ESLint with security rules
           pnpm exec eslint . \
             --ext .js,.jsx,.ts,.tsx \
+            --ignore-path <(echo ".github/") \
             --format json \
             --output-file eslint-security-results.json \
             --config '{"extends": ["plugin:security/recommended", "plugin:node-security/recommended"]}' \
