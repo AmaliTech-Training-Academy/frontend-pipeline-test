@@ -172,15 +172,11 @@ jobs:
       - name: SonarQube Scan
         id: sonar-scan
         if: inputs.scan_code
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        with:
-          args: >
-            -Dsonar.scanner.trustAllCerts=true
-            -Dcom.sun.net.ssl.checkRevocation=false
-            -Dtrust_all_cert=true
+          JAVA_OPTS: "-Dcom.sun.net.ssl.checkRevocation=false -Dtrust_all_cert=true -Dsonar.scanner.trustAllCerts=true"
 
       - name: Wait for SonarQube Quality Gate
         id: sonar-quality-gate
