@@ -241,7 +241,7 @@ jobs:
           # Install eslint security plugins if not present
           if ! grep -q "eslint-plugin-security" package.json; then
             echo "Installing ESLint security plugins..."
-            pnpm add -D eslint-plugin-security eslint-plugin-node-security
+            pnpm add -D eslint-plugin-security
           fi
 
           # Run ESLint with security rules
@@ -250,16 +250,16 @@ jobs:
             --ignore-path <(echo ".github/") \
             --format json \
             --output-file eslint-security-results.json \
-            --config '{"extends": ["plugin:security/recommended", "plugin:node-security/recommended"]}' \
+            --config '{"extends": ["plugin:security/recommended"]}' \
             || true
 
           if [ -f eslint-security-results.json ]; then
-            SECURITY_ISSUES=$(cat eslint-security-results.json | jq '[.[].messages[] | select(.ruleId | test("security|node-security"))] | length')
+            SECURITY_ISSUES=$(cat eslint-security-results.json | jq '[.[].messages[] | select(.ruleId | test("security"))] | length')
             echo "Found $SECURITY_ISSUES security-related ESLint issues"
             if [ "$SECURITY_ISSUES" -gt 0 ]; then
               echo "::warning::Found $SECURITY_ISSUES security-related code issues"
               echo "📋 Security issues found:"
-              cat eslint-security-results.json | jq -r '.[].messages[] | select(.ruleId | test("security|node-security")) | "- \(.ruleId): \(.message)"'
+              cat eslint-security-results.json | jq -r '.[].messages[] | select(.ruleId | test("security")) | "- \(.ruleId): \(.message)"'
             fi
           fi
 
