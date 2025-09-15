@@ -211,6 +211,12 @@ jobs:
           echo "quality_gate=SKIPPED" >> $GITHUB_OUTPUT
 
       # Semgrep Static Analysis
+      - name: Create Semgrep ignore file
+        if: inputs.scan_code
+        run: |
+          echo ".github/" > .semgrepignore
+          echo "node_modules/" >> .semgrepignore
+
       - name: Semgrep Static Analysis
         if: inputs.scan_code
         uses: returntocorp/semgrep-action@v1
@@ -219,9 +225,6 @@ jobs:
             p/security-audit
             p/owasp-top-ten
             p/javascript
-        env:
-          SEMGREP_RULES: p/security-audit p/owasp-top-ten p/javascript
-          SEMGREP_EXCLUDE: .github/
 
       - name: Upload Semgrep results
         if: ${{ inputs.scan_code && always() && hashFiles('semgrep.sarif') != '' }}
