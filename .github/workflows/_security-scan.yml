@@ -176,6 +176,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          JAVA_OPTS: "-Dcom.sun.net.ssl.checkRevocation=false -Dtrust_all_cert=true"
 
       - name: Wait for SonarQube Quality Gate
         id: sonar-quality-gate
