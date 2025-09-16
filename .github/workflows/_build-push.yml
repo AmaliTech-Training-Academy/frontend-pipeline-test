@@ -230,13 +230,43 @@ jobs:
 
           # Create JSON from .env file
           echo "📝 Creating JSON from .env file..."
-          JSON_SECRETS=$(cat ./.env | grep -v '^#' | grep '=' | while IFS='=' read -r key value; do
-            if [[ -n "$key" && -n "$value" ]]; then
-              echo "\"$key\": \"$value\","
+          
+          # Create a temporary file to build JSON properly
+          JSON_TEMP_FILE=$(mktemp)
+          echo "{" > "$JSON_TEMP_FILE"
+          
+          # Process .env file line by line
+          while IFS='=' read -r key value; do
+            # Skip comments and empty lines
+            if [[ "$key" =~ ^[[:space:]]*# ]] || [[ -z "$key" ]] || [[ -z "$value" ]]; then
+              continue
             fi
-          done | sed '$ s/,$//')
-
-          NEW_SECRET_JSON="{$JSON_SECRETS}"
+            
+            # Remove any trailing carriage return or whitespace
+            key=$(echo "$key" | tr -d '\r' | xargs)
+            value=$(echo "$value" | tr -d '\r')
+            
+            # Escape quotes in the value and add to JSON
+            escaped_value=$(echo "$value" | sed 's/"/\\"/g')
+            echo "  \"$key\": \"$escaped_value\"," >> "$JSON_TEMP_FILE"
+          done < ./.env
+          
+          # Remove the last comma and close the JSON
+          sed -i '$ s/,$//' "$JSON_TEMP_FILE"
+          echo "}" >> "$JSON_TEMP_FILE"
+          
+          # Read the complete JSON
+          NEW_SECRET_JSON=$(cat "$JSON_TEMP_FILE")
+          rm -f "$JSON_TEMP_FILE"
+          
+          # Validate JSON syntax
+          if ! echo "$NEW_SECRET_JSON" | jq empty 2>/dev/null; then
+            echo "❌ Generated invalid JSON from .env file"
+            echo "Generated JSON: $NEW_SECRET_JSON"
+            exit 1
+          fi
+          
+          echo "✅ Valid JSON created from .env file"
 
           # Always use merge strategy - assume secret exists
           echo "🔄 Implementing merge strategy for existing secret..."
@@ -249,10 +279,23 @@ jobs:
             echo "❌ Failed to retrieve existing secret or secret is empty"
             exit 1
           fi
+          
+          # Validate existing secret JSON
+          if ! echo "$EXISTING_SECRET" | jq empty 2>/dev/null; then
+            echo "❌ Existing secret contains invalid JSON"
+            exit 1
+          fi
+          echo "✅ Existing secret JSON is valid"
 
           # Merge existing and new secrets using jq
           echo "🔀 Merging new values with existing secret (preserving untouched variables)..."
           MERGED_SECRET=$(echo "$EXISTING_SECRET" | jq --argjson new "$NEW_SECRET_JSON" '. + $new')
+          
+          if [[ -z "$MERGED_SECRET" ]]; then
+            echo "❌ Failed to merge secrets"
+            exit 1
+          fi
+          echo "✅ Secrets merged successfully"
 
           # Update secret with merged values
           echo "✅ Updating secret with merged values..."
