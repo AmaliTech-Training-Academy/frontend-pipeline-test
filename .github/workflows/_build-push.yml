@@ -230,11 +230,11 @@ jobs:
 
           # Create JSON from .env file
           echo "📝 Creating JSON from .env file..."
-          
+
           # Create a temporary file to build JSON properly
           JSON_TEMP_FILE=$(mktemp)
           echo "{" > "$JSON_TEMP_FILE"
-          
+
           # Process .env file line by line
           while IFS='=' read -r key value; do
             # Skip comments and empty lines
@@ -250,22 +250,22 @@ jobs:
             escaped_value=$(echo "$value" | sed 's/"/\\"/g')
             echo "  \"$key\": \"$escaped_value\"," >> "$JSON_TEMP_FILE"
           done < ./.env
-          
+
           # Remove the last comma and close the JSON
           sed -i '$ s/,$//' "$JSON_TEMP_FILE"
           echo "}" >> "$JSON_TEMP_FILE"
-          
+
           # Read the complete JSON
           NEW_SECRET_JSON=$(cat "$JSON_TEMP_FILE")
           rm -f "$JSON_TEMP_FILE"
-          
+
           # Validate JSON syntax
           if ! echo "$NEW_SECRET_JSON" | jq empty 2>/dev/null; then
             echo "❌ Generated invalid JSON from .env file"
             echo "Generated JSON: $NEW_SECRET_JSON"
             exit 1
           fi
-          
+
           echo "✅ Valid JSON created from .env file"
 
           # Always use merge strategy - assume secret exists
@@ -279,7 +279,7 @@ jobs:
             echo "❌ Failed to retrieve existing secret or secret is empty"
             exit 1
           fi
-          
+
           # Validate existing secret JSON
           if ! echo "$EXISTING_SECRET" | jq empty 2>/dev/null; then
             echo "❌ Existing secret contains invalid JSON"
@@ -290,7 +290,7 @@ jobs:
           # Merge existing and new secrets using jq
           echo "🔀 Merging new values with existing secret (preserving untouched variables)..."
           MERGED_SECRET=$(echo "$EXISTING_SECRET" | jq --argjson new "$NEW_SECRET_JSON" '. + $new')
-          
+
           if [[ -z "$MERGED_SECRET" ]]; then
             echo "❌ Failed to merge secrets"
             exit 1
@@ -315,15 +315,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
 
       - name: Build Docker image
         id: build
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          # Use single platform for local builds to enable image loading and scanning
+          # Multi-platform builds with push:false don't load into local Docker daemon
+          platforms: linux/amd64
           push: false
+          load: true # Required for Trivy to access the built image locally
           tags: cloudinsight-frontend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
