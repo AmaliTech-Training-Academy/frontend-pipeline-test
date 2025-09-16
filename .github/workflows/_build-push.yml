@@ -230,33 +230,29 @@ jobs:
 
           NEW_SECRET_JSON="{$JSON_SECRETS}"
 
-          # Implement merge strategy
-          if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" >/dev/null 2>&1; then
-            echo "📄 Secret exists: $SECRET_NAME"
-            echo "🔄 Implementing merge strategy..."
-            
-            # Get existing secret
-            EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --query SecretString --output text)
-            
-            # Merge existing and new secrets using jq
-            MERGED_SECRET=$(echo "$EXISTING_SECRET" | jq --argjson new "$NEW_SECRET_JSON" '. + $new')
-            
-            echo "✅ Updating secret with merged values..."
-            aws secretsmanager update-secret \
-              --secret-id "$SECRET_NAME" \
-              --secret-string "$MERGED_SECRET"
-              
-            echo "📊 Merged secret successfully - existing values preserved, new/updated values applied"
-          else
-            echo "🆕 Creating new secret: $SECRET_NAME"
-            aws secretsmanager create-secret \
-              --name "$SECRET_NAME" \
-              --description "Environment variables for CloudInsight Frontend" \
-              --secret-string "$NEW_SECRET_JSON" \
-              --secret-type "Other"
-              
-            echo "✅ New secret created with 'Other type of secret' configuration"
+          # Always use merge strategy - assume secret exists
+          echo "🔄 Implementing merge strategy for existing secret..."
+
+          # Get existing secret
+          echo "📄 Retrieving existing secret: $SECRET_NAME"
+          EXISTING_SECRET=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --query SecretString --output text)
+
+          if [[ -z "$EXISTING_SECRET" ]]; then
+            echo "❌ Failed to retrieve existing secret or secret is empty"
+            exit 1
           fi
+
+          # Merge existing and new secrets using jq
+          echo "🔀 Merging new values with existing secret (preserving untouched variables)..."
+          MERGED_SECRET=$(echo "$EXISTING_SECRET" | jq --argjson new "$NEW_SECRET_JSON" '. + $new')
+
+          # Update secret with merged values
+          echo "✅ Updating secret with merged values..."
+          aws secretsmanager update-secret \
+            --secret-id "$SECRET_NAME" \
+            --secret-string "$MERGED_SECRET"
+            
+          echo "📊 Merge completed successfully - existing values preserved, only specified values updated"
 
           echo "🎯 Secrets deployment completed for: $SECRET_NAME"
 
