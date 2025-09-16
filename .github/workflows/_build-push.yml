@@ -75,14 +75,6 @@ jobs:
         run: |
           echo "🔍 Checking for encrypted environment files..."
 
-          # Setup cleanup trap for any exit (success or failure)
-          cleanup() {
-            echo "🧹 Performing security cleanup..."
-            rm -f ./team-private-key.pem ./temp-aes-key ./.env ./next-public-build-args.txt
-            echo "✅ Security cleanup completed"
-          }
-          trap cleanup EXIT
-
           # Find encrypted files in repository root
           ENCRYPTED_DATA=$(find . -maxdepth 1 -name "encrypted-env-vars.enc" -type f | head -1)
           ENCRYPTED_KEY=$(find . -maxdepth 1 -name "encrypted-aes-key.enc" -type f | head -1)
@@ -162,6 +154,10 @@ jobs:
             
             # Ensure .env is not tracked by git
             git add .gitignore 2>/dev/null || true
+            
+            # Clean up temporary key files (keep .env for later steps)
+            rm -f ./team-private-key.pem ./temp-aes-key
+            echo "🧹 Cleaned up temporary key files"
           else
             echo "❌ Decryption produced no output file"
             exit 1
@@ -325,3 +321,10 @@ jobs:
           else
             echo "- **Status:** ❌ Build failed" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Security cleanup
+        if: always()
+        run: |
+          echo "🧹 Performing security cleanup..."
+          rm -f ./team-private-key.pem ./temp-aes-key ./.env ./next-public-build-args.txt
+          echo "✅ Security cleanup completed"
