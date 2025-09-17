@@ -405,26 +405,28 @@ jobs:
         if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
         id: version
         run: |
-          # Prioritize git tags for version calculation, fallback to package.json
-          CURRENT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "")
-          
-          if [ -z "$CURRENT_VERSION" ] && [ -f package.json ] && command -v jq >/dev/null 2>&1; then
-            CURRENT_VERSION=$(jq -r '.version // "0.0.0"' package.json)
-          fi
-          
-          if [ -z "$CURRENT_VERSION" ]; then
+          # Get the latest tag from git
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -n "$LATEST_TAG" ]; then
+            CURRENT_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
+            echo "📋 Latest git tag: $LATEST_TAG (version: $CURRENT_VERSION)"
+          else
+            # No tags exist, start with default version
             CURRENT_VERSION="0.0.0"
+            echo "📋 No git tags found, starting with default version: $CURRENT_VERSION"
           fi
 
-          echo "📋 Current version from git tags: $CURRENT_VERSION"
-
+          # Parse version components
           IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
           MAJOR=${VERSION_PARTS[0]:-0}
           MINOR=${VERSION_PARTS[1]:-0}
           PATCH=${VERSION_PARTS[2]:-0}
 
           BUMP_TYPE="${{ steps.analyze-commits.outputs.suggested_bump }}"
+          echo "📋 Suggested bump type: $BUMP_TYPE"
 
+          # Calculate new version
           case "$BUMP_TYPE" in
             major)
               MAJOR=$((MAJOR + 1))
@@ -441,25 +443,19 @@ jobs:
           esac
 
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          echo "🏷️ Calculated new version: $NEW_VERSION (bump: $BUMP_TYPE)"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          NEW_TAG="v$NEW_VERSION"
 
-      - name: Update package.json
-        if: ${{ !inputs.build_only && steps.build.outcome == 'success' && hashFiles('package.json') != '' }}
-        run: |
-          if command -v jq >/dev/null 2>&1; then
-            jq --arg version "${{ steps.version.outputs.new_version }}" '.version = $version' package.json > package.json.tmp
-            mv package.json.tmp package.json
+          # Check if the calculated tag already exists
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+            echo "⚠️ Tag $NEW_TAG already exists, force bumping patch version"
+            PATCH=$((PATCH + 1))
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+            NEW_TAG="v$NEW_VERSION"
           fi
 
-      - name: Commit version changes
-        if: ${{ !inputs.build_only && steps.build.outcome == 'success' && hashFiles('package.json') != '' }}
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-
-          git add package.json
-          git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}" || echo "No changes to commit"
+          echo "🏷️ Calculated new version: $NEW_VERSION (bump: $BUMP_TYPE)"
+          echo "🏷️ New tag will be: $NEW_TAG"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Tag and push image to ECR
         if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
@@ -491,13 +487,13 @@ jobs:
         run: |
           TAG_NAME="v${{ steps.version.outputs.new_version }}"
           echo "🏷️ Creating git tag: $TAG_NAME"
-          
+
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
+
           git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
           git push origin "$TAG_NAME"
-          
+
           echo "✅ Successfully created and pushed git tag: $TAG_NAME"
 
       - name: Create GitHub Release
@@ -546,14 +542,6 @@ jobs:
                 echo "- **Git Tag:** ⏭️ Skipped (ECR push failed)" >> $GITHUB_STEP_SUMMARY
                 echo "- **GitHub Release:** ⏭️ Skipped (ECR push failed)" >> $GITHUB_STEP_SUMMARY
               fi
-            else
-              echo "- **Version:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
-              echo "- **ECR Push:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "- **Version:** ⏭️ Skipped (build only mode)" >> $GITHUB_STEP_SUMMARY
-            echo "- **ECR Push:** ⏭️ Skipped (build only mode)" >> $GITHUB_STEP_SUMMARY
-          fi
             else
               echo "- **Version:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
               echo "- **ECR Push:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
