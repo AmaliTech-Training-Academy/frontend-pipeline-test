@@ -80,4 +80,3 @@ jobs:
       version: ${{ needs.build-version-push.outputs.version || 'skipped' }}
       image_uri: ${{ needs.build-version-push.outputs.image_uri || 'not-built' }}
       sonar_quality_gate: ${{ needs.security-scan.outputs.sonar_quality_gate }}
-      build_needed: ${{ needs.build-version-push.outputs.build_needed || 'false' }}
