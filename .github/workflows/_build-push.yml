@@ -78,6 +78,7 @@ jobs:
           echo "🔍 Analyzing build requirements..."
           echo "📋 Event: ${{ github.event_name }}"
           echo "📋 Ref: ${{ github.ref }}"
+          echo "📋 Branch: ${{ github.ref_name }}"
           echo "📋 Is manual trigger: ${{ github.event_name == 'workflow_dispatch' }}"
 
           # Skip if manual trigger (workflow_dispatch)
@@ -86,15 +87,45 @@ jobs:
             SKIP_REASON="Manual trigger - build skipped by design"
             echo "⏭️ $SKIP_REASON"
 
-          # Skip if pull request
+          # For pull requests, analyze all commits in the PR
           elif [ "${{ github.event_name }}" == "pull_request" ]; then
-            BUILD_NEEDED="false"
-            SKIP_REASON="Pull request - build skipped by design"
-            echo "⏭️ $SKIP_REASON"
+            echo "🔍 Analyzing pull request commits..."
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            
+            echo "📋 PR base: $BASE_SHA"
+            echo "📋 PR head: $HEAD_SHA"
+            
+            # Get all commits in the PR
+            COMMITS=$(git log --oneline ${BASE_SHA}..${HEAD_SHA})
+            echo "📋 Commits in PR:"
+            echo "$COMMITS"
+            
+            # Analyze commit messages for build-requiring changes
+            BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
+            FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
+            FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
+            BUILD_CHANGES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ (build|ci)" | wc -l)
+            
+            echo "📊 PR Change analysis:"
+            echo "  - Breaking changes: $BREAKING_CHANGES"
+            echo "  - Features: $FEATURES"
+            echo "  - Fixes: $FIXES"
+            echo "  - Build/CI changes: $BUILD_CHANGES"
+            
+            # Build is needed if there are features, fixes, breaking changes, or build changes
+            if [ "$BREAKING_CHANGES" -gt 0 ] || [ "$FEATURES" -gt 0 ] || [ "$FIXES" -gt 0 ] || [ "$BUILD_CHANGES" -gt 0 ]; then
+              BUILD_NEEDED="true"
+              echo "✅ Build needed - found changes requiring build in PR"
+            else
+              BUILD_NEEDED="false"
+              SKIP_REASON="No build-requiring changes found in PR (only docs, chore, style, test, etc.)"
+              echo "⏭️ $SKIP_REASON"
+            fi
 
           # For push events, check target branches and commit messages
           elif [ "${{ github.event_name }}" == "push" ]; then
-            TARGET_BRANCHES="main|staging|production"
+            TARGET_BRANCHES="main|staging|production|develop|development"
             CURRENT_BRANCH="${{ github.ref_name }}"
             
             echo "📋 Current branch: $CURRENT_BRANCH"
@@ -103,19 +134,57 @@ jobs:
             # Check if pushing to target branch
             if [[ ! "$CURRENT_BRANCH" =~ ^($TARGET_BRANCHES)$ ]]; then
               BUILD_NEEDED="false"
-              SKIP_REASON="Not pushing to target branch ($CURRENT_BRANCH not in: main, staging, production)"
+              SKIP_REASON="Not pushing to target branch ($CURRENT_BRANCH not in: main, staging, production, develop)"
               echo "⏭️ $SKIP_REASON"
             else
-              # Analyze commit messages for build-requiring changes
-              LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-              
-              if [ -n "$LAST_TAG" ]; then
-                COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
-                echo "📋 Commits since last tag ($LAST_TAG):"
-                echo "$COMMITS"
+              # For staging/production branches, analyze commits since base branch
+              if [ "$CURRENT_BRANCH" == "staging" ]; then
+                # Staging always builds to create RC versions
+                echo "🔄 Staging branch detected - always build to create RC version"
+                BUILD_NEEDED="true"
+                
+              elif [ "$CURRENT_BRANCH" == "production" ]; then
+                # Production always builds to promote RC versions
+                echo "� Production branch detected - always build to promote RC version"
+                BUILD_NEEDED="true"
+                
               else
-                COMMITS=$(git log --oneline -10)  # Last 10 commits if no tags
-                echo "📋 Recent commits (no tags found):"
+                # For main/develop, analyze commits since last tag or recent commits
+                LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+                
+                if [ -n "$LAST_TAG" ]; then
+                  COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
+                  echo "📋 Commits since last tag ($LAST_TAG):"
+                else
+                  COMMITS=$(git log --oneline -10)  # Last 10 commits if no tags
+                  echo "📋 Recent commits (no tags found):"
+                fi
+                echo "$COMMITS"
+                
+                # Check for build-requiring changes in main/develop branches
+                BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
+                FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
+                FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
+                BUILD_CHANGES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ (build|ci)" | wc -l)
+                
+                echo "📊 Change analysis:"
+                echo "  - Breaking changes: $BREAKING_CHANGES"
+                echo "  - Features: $FEATURES" 
+                echo "  - Fixes: $FIXES"
+                echo "  - Build/CI changes: $BUILD_CHANGES"
+                
+                # Build is needed if there are features, fixes, breaking changes, or build changes
+                if [ "$BREAKING_CHANGES" -gt 0 ] || [ "$FEATURES" -gt 0 ] || [ "$FIXES" -gt 0 ] || [ "$BUILD_CHANGES" -gt 0 ]; then
+                  BUILD_NEEDED="true"
+                  echo "✅ Build needed - found changes requiring build"
+                else
+                  BUILD_NEEDED="false"
+                  SKIP_REASON="No build-requiring changes found (only docs, chore, style, test, etc.)"
+                  echo "⏭️ $SKIP_REASON"
+                fi
+              fi
+                  echo "📋 Recent commits (no tags found):"
+                fi
                 echo "$COMMITS"
               fi
               
@@ -176,6 +245,16 @@ jobs:
           echo "📋 Event: ${{ github.event_name }}"
           echo "📋 Branch: ${{ github.ref_name }}"
           echo "✅ Build required - proceeding with container build and deployment"
+
+      - name: Debug git state for troubleshooting
+        run: |
+          echo "🔍 Git state debugging:"
+          echo "📋 Current branch: $(git branch --show-current)"
+          echo "📋 Remote branches:"
+          git branch -r | head -10
+          echo "📋 Recent commits (last 5):"
+          git log --oneline -5
+          echo "📋 Last tag: $(git describe --tags --abbrev=0 2>/dev/null || echo 'No tags found')"
 
       - name: Setup pnpm
         if: inputs.project_type == 'frontend'
@@ -491,26 +570,93 @@ jobs:
         if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
         id: analyze-commits
         run: |
+          echo "🔍 Analyzing commit messages for semantic versioning..."
+          
+          # Get the latest tag
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-
+          
+          # Determine commit range to analyze
           if [ -n "$LAST_TAG" ]; then
-            COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
+            COMMIT_RANGE="${LAST_TAG}..HEAD"
+            echo "📋 Analyzing commits since last tag: $LAST_TAG"
           else
-            COMMITS=$(git log --oneline)
+            # If no tags, analyze last 10 commits to avoid too much noise
+            COMMIT_RANGE="HEAD~10..HEAD"
+            echo "📋 No tags found, analyzing recent commits"
           fi
-
-          BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
-          FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
-          FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
-
+          
+          # Check if this is a merge commit (typical in PR merges)
+          MERGE_COMMIT=$(git log --oneline -1 --merges HEAD)
+          if [ -n "$MERGE_COMMIT" ]; then
+            echo "🔀 Detected merge commit: $MERGE_COMMIT"
+            
+            # For merge commits, get the merge base and analyze all commits in the merged branch
+            MERGE_BASE=$(git merge-base HEAD~1 HEAD~2 2>/dev/null || git merge-base HEAD~1 HEAD^2 2>/dev/null || echo "")
+            if [ -n "$MERGE_BASE" ]; then
+              # Analyze commits from the merged branch (excluding the merge commit itself)
+              COMMIT_RANGE="${MERGE_BASE}..HEAD^2"
+              echo "📋 Analyzing merged branch commits: $COMMIT_RANGE"
+            else
+              echo "⚠️ Could not determine merge base, falling back to default range"
+            fi
+          fi
+          
+          # Get all commit messages in the range
+          echo "📝 Fetching commits in range: $COMMIT_RANGE"
+          COMMITS=$(git log $COMMIT_RANGE --pretty=format:"%s" 2>/dev/null || git log --oneline -5 --pretty=format:"%s")
+          
+          if [ -z "$COMMITS" ]; then
+            echo "⚠️ No commits found in range, analyzing last commit"
+            COMMITS=$(git log -1 --pretty=format:"%s")
+          fi
+          
+          echo "📋 Found commits:"
+          echo "$COMMITS" | while read commit; do echo "  - $commit"; done
+          
+          # Analyze commit messages for semantic versioning patterns
+          BREAKING_CHANGES=0
+          FEATURES=0
+          FIXES=0
+          
+          while IFS= read -r commit; do
+            [ -z "$commit" ] && continue
+            
+            echo "🔍 Analyzing: $commit"
+            
+            # Check for breaking changes (BREAKING CHANGE or ! in type)
+            if echo "$commit" | grep -qiE "(BREAKING CHANGE|^[^:]+!:|^[^(]+\([^)]*\)!:)"; then
+              echo "  💥 Breaking change detected"
+              BREAKING_CHANGES=$((BREAKING_CHANGES + 1))
+            # Check for features
+            elif echo "$commit" | grep -qE "^feat(\([^)]*\))?:"; then
+              echo "  ✨ Feature detected"
+              FEATURES=$((FEATURES + 1))
+            # Check for fixes
+            elif echo "$commit" | grep -qE "^fix(\([^)]*\))?:"; then
+              echo "  🐛 Fix detected"
+              FIXES=$((FIXES + 1))
+            # Check for other build-worthy changes
+            elif echo "$commit" | grep -qE "^(build|ci|perf|refactor)(\([^)]*\))?:"; then
+              echo "  🔧 Build/CI change detected"
+              FIXES=$((FIXES + 1))  # Treat as patch-level change
+            else
+              echo "  📝 Other commit (no version impact)"
+            fi
+          done <<< "$COMMITS"
+          
+          # Determine version bump
           if [ "$BREAKING_CHANGES" -gt 0 ]; then
             SUGGESTED_BUMP="major"
+            echo "🚀 Suggested bump: MAJOR (breaking changes: $BREAKING_CHANGES)"
           elif [ "$FEATURES" -gt 0 ]; then
             SUGGESTED_BUMP="minor"
+            echo "🚀 Suggested bump: MINOR (features: $FEATURES)"
           elif [ "$FIXES" -gt 0 ]; then
             SUGGESTED_BUMP="patch"
+            echo "🚀 Suggested bump: PATCH (fixes/improvements: $FIXES)"
           else
             SUGGESTED_BUMP="patch"
+            echo "🚀 Suggested bump: PATCH (default - no semantic commits found)"
           fi
 
           echo "suggested_bump=$SUGGESTED_BUMP" >> $GITHUB_OUTPUT
