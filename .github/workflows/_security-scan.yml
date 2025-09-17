@@ -263,30 +263,6 @@ jobs:
             fi
           fi
 
-      # Docker Image Security Scan (if Dockerfile exists)
-      - name: Docker image security scan
-        if: ${{ hashFiles('Dockerfile') != '' }}
-        run: |
-          echo "🔍 Scanning Docker image for vulnerabilities..."
-
-          # Build image first
-          docker build -t security-scan-image .
-
-          # Scan with Trivy
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:latest image \
-            --format json \
-            --output /tmp/trivy-image-results.json \
-            --severity HIGH,CRITICAL \
-            security-scan-image || true
-
-          # Scan with Grype
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            anchore/grype:latest \
-            security-scan-image \
-            -o json \
-            > grype-image-results.json || true
-
       # Security Summary
       - name: Security scan summary
         if: always()
@@ -323,7 +299,6 @@ jobs:
             trivy-results.sarif
             semgrep.sarif
             eslint-security-results.json
-            grype-image-results.json
           if-no-files-found: ignore
           retention-days: 30
 

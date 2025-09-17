@@ -27,6 +27,11 @@ on:
         required: false
         type: boolean
         default: false
+      trivy_severity:
+        description: "Trivy vulnerability scanner severity threshold"
+        required: false
+        type: string
+        default: "HIGH,CRITICAL"
     outputs:
       image_id:
         description: "Built image ID"
@@ -459,6 +464,7 @@ jobs:
           image-ref: cloudinsight-frontend:${{ github.sha }}
           format: "sarif"
           output: "trivy-image-results.sarif"
+          severity: ${{ inputs.trivy_severity }}
 
       - name: Upload Trivy scan results
         if: always()

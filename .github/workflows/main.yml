@@ -52,7 +52,6 @@ jobs:
       project_type: "frontend"
       scan_dependencies: true
       scan_code: true
-      trivy_severity: "MEDIUM,HIGH,CRITICAL"
     secrets: inherit
 
   build-version-push:
@@ -66,6 +65,7 @@ jobs:
       pnpm_version: "9.0.0"
       build_only: false
       push_secrets: true
+      trivy_severity: "MEDIUM,HIGH,CRITICAL"
     secrets: inherit
 
   notification:

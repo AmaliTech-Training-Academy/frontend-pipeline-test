@@ -118,9 +118,6 @@ jobs:
           TRIGGERED_BY="${{ inputs.triggered_by }}"
           TRIGGER_EVENT="${{ inputs.trigger_event }}"
 
-          echo "🔍 Debug: Received trigger_event='$TRIGGER_EVENT'"
-          echo "🔍 Debug: Received triggered_by='$TRIGGERED_BY'"
-
           # Build status summary
           STATUS_SUMMARY=""
           WORKFLOW_STEPS=""
@@ -168,8 +165,6 @@ jobs:
             "schedule") TRIGGER_DESC="Scheduled run" ;;
             *) TRIGGER_DESC="$TRIGGER_EVENT" ;;
           esac
-
-          echo "🔍 Debug: Set TRIGGER_DESC='$TRIGGER_DESC' for event='$TRIGGER_EVENT'"
 
           # Build main fields
           MAIN_FIELDS='[
