@@ -626,7 +626,7 @@ jobs:
         run: |
           ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY="${{ secrets.ECR_REPOSITORY_NAME }}"
-          VERSION_TAG=${{ steps.version.outputs.new_version }}
+          VERSION_TAG="v${{ steps.version.outputs.new_version }}"
           COMMIT_TAG=${{ github.sha }}
 
           echo "🔍 Checking if ECR repository exists..."
