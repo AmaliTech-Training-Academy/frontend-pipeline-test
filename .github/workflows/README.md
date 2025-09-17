@@ -201,6 +201,72 @@ git commit -m "feat!: redesign authentication system"
 - Tags container image with semantic version
 - Pushes versioned image to environment-specific ECR
 
+### Branch-Specific Versioning Strategy
+
+Our versioning strategy is designed around a **v0.x.x development phase** where we're still building core features. Production deployments are restricted to stable v1.x.x+ versions only.
+
+#### Development Branches (main, feature branches, etc.)
+
+- **Strategy**: Automatic version calculation based on commit messages
+- **Logic**: Uses semantic versioning (semver) with conventional commits
+- **Examples**:
+  - `feat:` → minor bump (v0.1.0 → v0.2.0)
+  - `fix:` → patch bump (v0.1.0 → v0.1.1)
+  - `BREAKING CHANGE` → major bump (v0.1.0 → v1.0.0)
+
+#### Staging Branch
+
+- **Strategy**: No version calculations - uses latest tag + `-rc` suffix
+- **Logic**: Takes the most recent tag and appends `-rc` for release candidate
+- **Examples**:
+  - Latest tag `v0.2.3` → Creates `v0.2.3-rc`
+  - If no tags exist → Creates `v0.1.0-rc`
+
+#### Production Branch
+
+- **Strategy**: Promotes latest RC tag to final version
+- **Logic**: Finds the latest `-rc` tag and removes the suffix
+- **Restrictions**:
+  - ❌ **v0.x.x versions are BLOCKED from production**
+  - ✅ Only v1.x.x+ versions can be deployed to production
+  - Must have an existing RC tag to promote
+
+#### v0.x.x Production Restriction
+
+**Why This Restriction Exists:**
+
+- v0.x.x indicates **development/beta phase**
+- Production should only receive **stable releases** (v1.x.x+)
+- Prevents accidental deployment of unstable features
+
+**Error Messages:**
+
+```bash
+# No RC Tag for Production
+❌ No RC tags found for production promotion
+💡 Deploy to staging first to create an RC tag
+
+# v0.x.x Production Block
+❌ Production deployment blocked: Cannot deploy v0.x.x versions to production
+🚫 Found RC tag: v0.2.3-rc (v0.x.x not allowed in production)
+💡 Versions must be v1.x.x or higher for production deployment
+📋 This restriction exists because we're still in v0.x.x development phase
+```
+
+**Workflow Examples:**
+
+_Typical Development Flow:_
+
+1. **Feature Development** (main branch): `v0.2.0` + `feat:` → `v0.3.0`
+2. **Staging Deployment** (staging branch): Latest tag `v0.3.0` → `v0.3.0-rc`
+3. **Production Deployment** (production branch): ❌ BLOCKED - v0.x.x not allowed
+
+_First Production Release Flow:_
+
+1. **Major Release** (main branch): `v0.9.0` + `BREAKING CHANGE` → `v1.0.0`
+2. **Staging Deployment** (staging branch): Latest tag `v1.0.0` → `v1.0.0-rc`
+3. **Production Deployment** (production branch): ✅ SUCCESS - `v1.0.0` deployed
+
 ## 📊 Monitoring & Observability
 
 ### Pipeline Performance

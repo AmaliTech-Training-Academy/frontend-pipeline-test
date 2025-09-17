@@ -525,45 +525,94 @@ jobs:
             echo "📋 No git tags found, starting with default version: $CURRENT_VERSION"
           fi
 
-          # Parse version components
-          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
-          MAJOR=${VERSION_PARTS[0]:-0}
-          MINOR=${VERSION_PARTS[1]:-0}
-          PATCH=${VERSION_PARTS[2]:-0}
+          # Handle branch-specific versioning strategies
+          if [ "${{ github.ref_name }}" == "staging" ]; then
+            # Staging: Use latest tag + '-rc' (no version calculations)
+            echo "🔄 Staging branch detected - using latest tag with RC suffix"
+            if [ -n "$LATEST_TAG" ]; then
+              # Remove any existing -rc suffix and add new one
+              BASE_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//' | sed 's/-rc$//')
+              NEW_VERSION="$BASE_VERSION-rc"
+            else
+              NEW_VERSION="0.1.0-rc"
+              echo "📋 No existing tags, starting with 0.1.0-rc"
+            fi
+            NEW_TAG="v$NEW_VERSION"
+            
+          elif [ "${{ github.ref_name }}" == "production" ]; then
+            # Production: Find latest RC tag and promote it (no calculations)
+            echo "🚀 Production branch detected - looking for latest RC tag to promote"
+            
+            # Find the latest RC tag
+            LATEST_RC_TAG=$(git tag -l "v*-rc" | sort -V | tail -n1)
+            
+            if [ -z "$LATEST_RC_TAG" ]; then
+              echo "❌ No RC tags found for production promotion"
+              echo "💡 Deploy to staging first to create an RC tag"
+              exit 1
+            fi
+            
+            # Extract base version from RC tag and check if it's v1.x.x+
+            RC_VERSION=$(echo "$LATEST_RC_TAG" | sed 's/^v//' | sed 's/-rc$//')
+            IFS='.' read -ra RC_PARTS <<< "$RC_VERSION"
+            RC_MAJOR=${RC_PARTS[0]:-0}
+            
+            if [ "$RC_MAJOR" -eq 0 ]; then
+              echo "❌ Production deployment blocked: Cannot deploy v0.x.x versions to production"
+              echo "� Found RC tag: $LATEST_RC_TAG (v0.x.x not allowed in production)"
+              echo "💡 Versions must be v1.x.x or higher for production deployment"
+              echo "📋 This restriction exists because we're still in v0.x.x development phase"
+              exit 1
+            fi
+            
+            NEW_VERSION="$RC_VERSION"
+            NEW_TAG="v$NEW_VERSION"
+            echo "✅ Promoting RC tag $LATEST_RC_TAG to production version $NEW_TAG"
+            
+          else
+            # Development/main branches: Calculate new versions
+            echo "� Development branch detected - calculating new version"
+            
+            # Parse version components
+            IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+            MAJOR=${VERSION_PARTS[0]:-0}
+            MINOR=${VERSION_PARTS[1]:-0}
+            PATCH=${VERSION_PARTS[2]:-0}
 
-          BUMP_TYPE="${{ steps.analyze-commits.outputs.suggested_bump }}"
-          echo "📋 Suggested bump type: $BUMP_TYPE"
+            BUMP_TYPE="${{ steps.analyze-commits.outputs.suggested_bump }}"
+            echo "📋 Suggested bump type: $BUMP_TYPE"
 
-          # Calculate new version
-          case "$BUMP_TYPE" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
+            # Calculate new version
+            case "$BUMP_TYPE" in
+              major)
+                MAJOR=$((MAJOR + 1))
+                MINOR=0
+                PATCH=0
+                ;;
+              minor)
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                ;;
+              patch)
+                PATCH=$((PATCH + 1))
+                ;;
+            esac
 
-          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          NEW_TAG="v$NEW_VERSION"
-
-          # Check if the calculated tag already exists
-          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
-            echo "⚠️ Tag $NEW_TAG already exists, force bumping patch version"
-            PATCH=$((PATCH + 1))
             NEW_VERSION="$MAJOR.$MINOR.$PATCH"
             NEW_TAG="v$NEW_VERSION"
+
+            # Check if the calculated tag already exists
+            if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+              echo "⚠️ Tag $NEW_TAG already exists, force bumping patch version"
+              PATCH=$((PATCH + 1))
+              NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+              NEW_TAG="v$NEW_VERSION"
+            fi
           fi
 
           echo "🏷️ Calculated new version: $NEW_VERSION (bump: $BUMP_TYPE)"
           echo "🏷️ New tag will be: $NEW_TAG"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_TAG" >> $GITHUB_OUTPUT
 
       - name: Tag and push image to ECR
         if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}

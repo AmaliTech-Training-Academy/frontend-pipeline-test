@@ -77,8 +77,8 @@ jobs:
     with:
       status: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
       stage: Pipeline Complete
-      version: ${{ needs.build-version-push.outputs.version || 'skipped' }}
-      image_uri: ${{ needs.build-version-push.outputs.image_uri || 'not-built' }}
+      version: ${{ needs.build-version-push.result == 'success' && needs.build-version-push.outputs.version || '' }}
+      image_uri: ${{ needs.build-version-push.result == 'success' && needs.build-version-push.outputs.image_uri || '' }}
       sonar_quality_gate: ${{ needs.security-scan.outputs.sonar_quality_gate || 'unknown' }}
       build_needed: ${{ needs.build-version-push.outputs.build_needed || 'false' }}
       quality_result: ${{ needs.quality-tests.result }}
