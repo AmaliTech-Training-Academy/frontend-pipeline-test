@@ -11,17 +11,17 @@ export interface ChartCardProps {
 }
 
 export interface ChartWrapperProps {
-  title: string;
-  subTitle?: string;
-  isLoading: boolean;
-  hasError: boolean;
-  errorMessage?: string;
-  onRetry: () => void;
-  children: ReactNode; // The actual chart component
-  className?: string;
-  withTitle?: boolean;
-  contentClassName?: string;
-  isEmpty?: boolean;
-  emptyMessage?: string;
-  emptyIcon?: ReactNode;
+  readonly title: string;
+  readonly subTitle?: string;
+  readonly isLoading: boolean;
+  readonly hasError: boolean;
+  readonly errorMessage?: string;
+  readonly onRetry: () => void;
+  readonly children: ReactNode; // The actual chart component
+  readonly className?: string;
+  readonly withTitle?: boolean;
+  readonly contentClassName?: string;
+  readonly isEmpty?: boolean;
+  readonly emptyMessage?: string;
+  readonly emptyIcon?: ReactNode;
 }
