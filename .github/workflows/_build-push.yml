@@ -183,32 +183,6 @@ jobs:
                   echo "⏭️ $SKIP_REASON"
                 fi
               fi
-                  echo "📋 Recent commits (no tags found):"
-                fi
-                echo "$COMMITS"
-              fi
-              
-              # Check for build-requiring changes
-              BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
-              FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
-              FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
-              BUILD_CHANGES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ (build|ci)" | wc -l)
-              
-              echo "📊 Change analysis:"
-              echo "  - Breaking changes: $BREAKING_CHANGES"
-              echo "  - Features: $FEATURES"
-              echo "  - Fixes: $FIXES"
-              echo "  - Build/CI changes: $BUILD_CHANGES"
-              
-              # Build is needed if there are features, fixes, breaking changes, or build changes
-              if [ "$BREAKING_CHANGES" -gt 0 ] || [ "$FEATURES" -gt 0 ] || [ "$FIXES" -gt 0 ] || [ "$BUILD_CHANGES" -gt 0 ]; then
-                BUILD_NEEDED="true"
-                echo "✅ Build needed - found changes requiring build"
-              else
-                BUILD_NEEDED="false"
-                SKIP_REASON="No build-requiring changes found (only docs, chore, style, test, etc.)"
-                echo "⏭️ $SKIP_REASON"
-              fi
             fi
           fi
 
