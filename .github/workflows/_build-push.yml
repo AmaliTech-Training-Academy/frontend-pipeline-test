@@ -571,10 +571,10 @@ jobs:
         id: analyze-commits
         run: |
           echo "🔍 Analyzing commit messages for semantic versioning..."
-          
+
           # Get the latest tag
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
+
           # Determine commit range to analyze
           if [ -n "$LAST_TAG" ]; then
             COMMIT_RANGE="${LAST_TAG}..HEAD"
@@ -584,7 +584,7 @@ jobs:
             COMMIT_RANGE="HEAD~10..HEAD"
             echo "📋 No tags found, analyzing recent commits"
           fi
-          
+
           # Check if this is a merge commit (typical in PR merges)
           MERGE_COMMIT=$(git log --oneline -1 --merges HEAD)
           if [ -n "$MERGE_COMMIT" ]; then
@@ -600,24 +600,24 @@ jobs:
               echo "⚠️ Could not determine merge base, falling back to default range"
             fi
           fi
-          
+
           # Get all commit messages in the range
           echo "📝 Fetching commits in range: $COMMIT_RANGE"
           COMMITS=$(git log $COMMIT_RANGE --pretty=format:"%s" 2>/dev/null || git log --oneline -5 --pretty=format:"%s")
-          
+
           if [ -z "$COMMITS" ]; then
             echo "⚠️ No commits found in range, analyzing last commit"
             COMMITS=$(git log -1 --pretty=format:"%s")
           fi
-          
+
           echo "📋 Found commits:"
           echo "$COMMITS" | while read commit; do echo "  - $commit"; done
-          
+
           # Analyze commit messages for semantic versioning patterns
           BREAKING_CHANGES=0
           FEATURES=0
           FIXES=0
-          
+
           while IFS= read -r commit; do
             [ -z "$commit" ] && continue
             
@@ -643,7 +643,7 @@ jobs:
               echo "  📝 Other commit (no version impact)"
             fi
           done <<< "$COMMITS"
-          
+
           # Determine version bump
           if [ "$BREAKING_CHANGES" -gt 0 ]; then
             SUGGESTED_BUMP="major"
