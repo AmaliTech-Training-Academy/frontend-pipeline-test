@@ -79,4 +79,12 @@ jobs:
       stage: Pipeline Complete
       version: ${{ needs.build-version-push.outputs.version || 'skipped' }}
       image_uri: ${{ needs.build-version-push.outputs.image_uri || 'not-built' }}
-      sonar_quality_gate: ${{ needs.security-scan.outputs.sonar_quality_gate }}
+      sonar_quality_gate: ${{ needs.security-scan.outputs.sonar_quality_gate || 'unknown' }}
+      build_needed: ${{ needs.build-version-push.outputs.build_needed || 'false' }}
+      quality_result: ${{ needs.quality-tests.result }}
+      security_result: ${{ needs.security-scan.result }}
+      build_result: ${{ needs.build-version-push.result }}
+      triggered_by: ${{ github.actor }}
+      trigger_event: ${{ github.event_name }}
+      trigger_time: ${{ github.event.head_commit.timestamp || github.event.created_at || github.run_id }}
+      workflow_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
