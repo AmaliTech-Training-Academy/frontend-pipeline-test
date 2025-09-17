@@ -55,8 +55,8 @@ jobs:
       trivy_severity: "MEDIUM,HIGH,CRITICAL"
     secrets: inherit
 
-  build-image:
-    name: Build Container Image
+  build-version-push:
+    name: Build, Version & Push Container Image
     needs: [quality-tests, security-scan]
     if: ${{ !failure() && !cancelled() && needs.security-scan.outputs.sonar_quality_gate != 'FAILED' }}
     uses: ./.github/workflows/_build-push.yml
@@ -64,26 +64,19 @@ jobs:
       project_type: "frontend"
       node_version: "22.x"
       pnpm_version: "9.0.0"
-      build_only: true
+      build_only: false
       push_secrets: true
-    secrets: inherit
-
-  version-and-push:
-    name: Version & Push to ECR
-    needs: [quality-tests, security-scan, build-image]
-    if: ${{ success() && needs.security-scan.outputs.sonar_quality_gate != 'FAILED' }}
-    uses: ./.github/workflows/_versioning.yml
     secrets: inherit
 
   notification:
     name: Send Notifications
-    needs: [quality-tests, security-scan, build-image, version-and-push]
+    needs: [quality-tests, security-scan, build-version-push]
     if: always()
     uses: ./.github/workflows/_notification.yml
     secrets: inherit
     with:
       status: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
       stage: Pipeline Complete
-      version: ${{ needs.version-and-push.outputs.version }}
-      image_uri: ${{ needs.version-and-push.outputs.image_uri }}
+      version: ${{ needs.build-version-push.outputs.version }}
+      image_uri: ${{ needs.build-version-push.outputs.image_uri }}
       sonar_quality_gate: ${{ needs.security-scan.outputs.sonar_quality_gate }}

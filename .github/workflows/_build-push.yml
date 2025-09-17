@@ -1,4 +1,4 @@
-name: Build and Push Module
+name: Build, Version and Push Module
 
 on:
   workflow_call:
@@ -18,7 +18,7 @@ on:
         type: string
         default: "9.0.0"
       build_only:
-        description: "Only build the image, do not push"
+        description: "Only build the image, do not version and push"
         required: false
         type: boolean
         default: false
@@ -30,25 +30,33 @@ on:
     outputs:
       image_id:
         description: "Built image ID"
-        value: ${{ jobs.build-push.outputs.image_id }}
+        value: ${{ jobs.build-version-push.outputs.image_id }}
       image_tag:
         description: "Image tag without registry"
-        value: ${{ jobs.build-push.outputs.image_tag }}
+        value: ${{ jobs.build-version-push.outputs.image_tag }}
+      version:
+        description: "Generated version"
+        value: ${{ jobs.build-version-push.outputs.version }}
+      image_uri:
+        description: "Pushed image URI"
+        value: ${{ jobs.build-version-push.outputs.image_uri }}
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   security-events: write
 
 jobs:
-  build-push:
-    name: Build Container Image
+  build-version-push:
+    name: Build, Version & Push Container Image
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: ${{ github.ref == 'refs/heads/production' && 'production' || github.ref == 'refs/heads/staging' && 'staging' || 'development' }}
     outputs:
       image_id: ${{ steps.build.outputs.imageid }}
       image_tag: cloudinsight-frontend:${{ github.sha }}
+      version: ${{ steps.version.outputs.new_version }}
+      image_uri: ${{ steps.push.outputs.image_uri }}
 
     steps:
       - name: Checkout repository
@@ -364,19 +372,195 @@ jobs:
             echo "❌ SARIF file not found"
           fi
 
-      - name: Build summary
+      # Versioning and Push steps (only run if not build_only mode)
+      - name: Analyze commit messages
+        if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
+        id: analyze-commits
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -n "$LAST_TAG" ]; then
+            COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
+          else
+            COMMITS=$(git log --oneline)
+          fi
+
+          BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
+          FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
+          FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
+
+          if [ "$BREAKING_CHANGES" -gt 0 ]; then
+            SUGGESTED_BUMP="major"
+          elif [ "$FEATURES" -gt 0 ]; then
+            SUGGESTED_BUMP="minor"
+          elif [ "$FIXES" -gt 0 ]; then
+            SUGGESTED_BUMP="patch"
+          else
+            SUGGESTED_BUMP="patch"
+          fi
+
+          echo "suggested_bump=$SUGGESTED_BUMP" >> $GITHUB_OUTPUT
+
+      - name: Calculate version
+        if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
+        id: version
+        run: |
+          # Prioritize git tags for version calculation, fallback to package.json
+          CURRENT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "")
+          
+          if [ -z "$CURRENT_VERSION" ] && [ -f package.json ] && command -v jq >/dev/null 2>&1; then
+            CURRENT_VERSION=$(jq -r '.version // "0.0.0"' package.json)
+          fi
+          
+          if [ -z "$CURRENT_VERSION" ]; then
+            CURRENT_VERSION="0.0.0"
+          fi
+
+          echo "📋 Current version from git tags: $CURRENT_VERSION"
+
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR=${VERSION_PARTS[0]:-0}
+          MINOR=${VERSION_PARTS[1]:-0}
+          PATCH=${VERSION_PARTS[2]:-0}
+
+          BUMP_TYPE="${{ steps.analyze-commits.outputs.suggested_bump }}"
+
+          case "$BUMP_TYPE" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "🏷️ Calculated new version: $NEW_VERSION (bump: $BUMP_TYPE)"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update package.json
+        if: ${{ !inputs.build_only && steps.build.outcome == 'success' && hashFiles('package.json') != '' }}
+        run: |
+          if command -v jq >/dev/null 2>&1; then
+            jq --arg version "${{ steps.version.outputs.new_version }}" '.version = $version' package.json > package.json.tmp
+            mv package.json.tmp package.json
+          fi
+
+      - name: Commit version changes
+        if: ${{ !inputs.build_only && steps.build.outcome == 'success' && hashFiles('package.json') != '' }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add package.json
+          git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}" || echo "No changes to commit"
+
+      - name: Tag and push image to ECR
+        if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
+        id: push
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY="${{ secrets.ECR_REPOSITORY_NAME }}"
+          VERSION_TAG=${{ steps.version.outputs.new_version }}
+          COMMIT_TAG=${{ github.sha }}
+
+          echo "🔍 Checking if ECR repository exists..."
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY 2>/dev/null || \
+          aws ecr create-repository --repository-name $ECR_REPOSITORY
+
+          echo "🏷️ Tagging image for ECR push..."
+          docker tag cloudinsight-frontend:$COMMIT_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$VERSION_TAG
+          docker tag cloudinsight-frontend:$COMMIT_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+          echo "📤 Pushing image to ECR..."
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$VERSION_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$VERSION_TAG"
+          echo "✅ Successfully pushed image to ECR: $IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Create git tag (only after successful ECR push)
+        if: ${{ !inputs.build_only && steps.push.outcome == 'success' }}
+        run: |
+          TAG_NAME="v${{ steps.version.outputs.new_version }}"
+          echo "🏷️ Creating git tag: $TAG_NAME"
+          
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+          git push origin "$TAG_NAME"
+          
+          echo "✅ Successfully created and pushed git tag: $TAG_NAME"
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.build_only && steps.push.outcome == 'success' }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.version.outputs.new_version }}
+          release_name: Release v${{ steps.version.outputs.new_version }}
+          body: |
+            CloudInsight Frontend Release v${{ steps.version.outputs.new_version }}
+
+            🐳 **Container Image:** ${{ steps.push.outputs.image_uri }}
+            📝 **Commit:** ${{ github.sha }}
+            🔄 **Bump Type:** ${{ steps.analyze-commits.outputs.suggested_bump }}
+          draft: false
+          prerelease: false
+
+      - name: Build and deployment summary
         if: always()
         run: |
-          echo "## 🐳 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🐳 Build & Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Project Type:** ${{ inputs.project_type }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Image Tag:** cloudinsight-frontend:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Only:** ${{ inputs.build_only }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Push Secrets:** ${{ inputs.push_secrets }}" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.build.outcome }}" == "success" ]; then
-            echo "- **Status:** ✅ Build successful" >> $GITHUB_STEP_SUMMARY
+            echo "- **Build Status:** ✅ Build successful" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- **Status:** ❌ Build failed" >> $GITHUB_STEP_SUMMARY
+            echo "- **Build Status:** ❌ Build failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ inputs.build_only }}" == "false" ]; then
+            if [ "${{ steps.build.outcome }}" == "success" ]; then
+              echo "- **Version:** ${{ steps.version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+              
+              if [ "${{ steps.push.outcome }}" == "success" ]; then
+                echo "- **ECR Push:** ✅ Pushed to ECR" >> $GITHUB_STEP_SUMMARY
+                echo "- **Image URI:** ${{ steps.push.outputs.image_uri }}" >> $GITHUB_STEP_SUMMARY
+                echo "- **Git Tag:** ✅ Created v${{ steps.version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+                echo "- **GitHub Release:** ✅ Created" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "- **ECR Push:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+                echo "- **Git Tag:** ⏭️ Skipped (ECR push failed)" >> $GITHUB_STEP_SUMMARY
+                echo "- **GitHub Release:** ⏭️ Skipped (ECR push failed)" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "- **Version:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
+              echo "- **ECR Push:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- **Version:** ⏭️ Skipped (build only mode)" >> $GITHUB_STEP_SUMMARY
+            echo "- **ECR Push:** ⏭️ Skipped (build only mode)" >> $GITHUB_STEP_SUMMARY
+          fi
+            else
+              echo "- **Version:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
+              echo "- **ECR Push:** ⏭️ Skipped (build failed)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- **Version:** ⏭️ Skipped (build only mode)" >> $GITHUB_STEP_SUMMARY
+            echo "- **ECR Push:** ⏭️ Skipped (build only mode)" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Security cleanup
