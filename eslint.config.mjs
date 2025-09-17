@@ -26,7 +26,7 @@ const eslintConfig = [
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": "error",
 
-      // Prevent warning comments like TODO, FIXME
+      // Prevent warning comments like TODO, FIXME to ensure clean code
       "no-warning-comments": [
         "error",
         {
@@ -35,7 +35,7 @@ const eslintConfig = [
         },
       ],
 
-      // Enforce comment formatting
+      // Enforce proper comment formatting with spaces
       "spaced-comment": [
         "error",
         "always",
@@ -54,7 +54,7 @@ const eslintConfig = [
     },
   },
   {
-    // wee will target specific jsx comment patterns instead of all commented code
+    // Target specific JSX comment patterns to prevent commented-out code
     files: ["**/*.{js,jsx,ts,tsx}"],
     rules: {
       "no-warning-comments": [
