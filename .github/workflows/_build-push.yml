@@ -612,7 +612,7 @@ jobs:
 
           echo "🏷️ Calculated new version: $NEW_VERSION (bump: $BUMP_TYPE)"
           echo "🏷️ New tag will be: $NEW_TAG"
-          echo "new_version=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Tag and push image to ECR
         if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
