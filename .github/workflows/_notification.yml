@@ -105,8 +105,8 @@ jobs:
       - name: Prepare enhanced Slack payload
         id: payload
         run: |
-          # Get current timestamp
-          TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
+          # Get current timestamp in CAT (Central Africa Time, UTC+2)
+          TIMESTAMP=$(TZ='Africa/Johannesburg' date '+%Y-%m-%d %H:%M:%S CAT')
 
           # Determine build status and details
           BUILD_NEEDED="${{ inputs.build_needed }}"
