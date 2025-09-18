@@ -205,7 +205,7 @@ git commit -m "feat!: redesign authentication system"
 
 Our versioning strategy is designed around a **v0.x.x development phase** where we're still building core features. Production deployments are restricted to stable v1.x.x+ versions only.
 
-#### Development Branches (main, feature branches, etc.)
+#### Development Branches (development, feature branches, etc.)
 
 - **Strategy**: Automatic version calculation based on commit messages
 - **Logic**: Uses semantic versioning (semver) with conventional commits
@@ -257,13 +257,13 @@ Our versioning strategy is designed around a **v0.x.x development phase** where 
 
 _Typical Development Flow:_
 
-1. **Feature Development** (main branch): `v0.2.0` + `feat:` → `v0.3.0`
+1. **Feature Development** (development branch): `v0.2.0` + `feat:` → `v0.3.0`
 2. **Staging Deployment** (staging branch): Latest tag `v0.3.0` → `v0.3.0-rc`
 3. **Production Deployment** (production branch): ❌ BLOCKED - v0.x.x not allowed
 
 _First Production Release Flow:_
 
-1. **Major Release** (main branch): `v0.9.0` + `BREAKING CHANGE` → `v1.0.0`
+1. **Major Release** (development branch): `v0.9.0` + `BREAKING CHANGE` → `v1.0.0`
 2. **Staging Deployment** (staging branch): Latest tag `v1.0.0` → `v1.0.0-rc`
 3. **Production Deployment** (production branch): ✅ SUCCESS - `v1.0.0` deployed
 
