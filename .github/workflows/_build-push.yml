@@ -727,26 +727,15 @@ jobs:
               RC_VERSION=$(echo "$LATEST_RC_TAG" | sed 's/^v//' | sed 's/-rc$//')
               
               echo "📋 Found RC tag: $LATEST_RC_TAG"
-              echo "🔍 Analyzing merged PR commits for breaking changes..."
+              echo "🔍 Analyzing merge commit for breaking changes..."
               
-              # Analyze merged PR commits for breaking changes
-              HAS_BREAKING_CHANGES=false
-              BREAKING_COMMITS=""
+              # Analyze ONLY the merge commit message for breaking changes
+              MERGE_COMMIT_MSG=$(git log --format=%s -n 1 $MERGE_COMMIT 2>/dev/null || echo "")
+              echo "� Merge commit message: $MERGE_COMMIT_MSG"
               
-              for commit in $PR_COMMITS; do
-                # Get commit message
-                COMMIT_MSG=$(git log --format=%s -n 1 $commit 2>/dev/null || echo "")
-                
-                # Check for breaking changes (BREAKING CHANGE: or type!: patterns)
-                if echo "$COMMIT_MSG" | grep -qiE "(BREAKING CHANGE:|^[^:]+!:|^[^(]+\([^)]*\)!:)"; then
-                  HAS_BREAKING_CHANGES=true
-                  BREAKING_COMMITS="$BREAKING_COMMITS\n  - $commit: $COMMIT_MSG"
-                  echo "  💥 Breaking change detected in $commit: $COMMIT_MSG"
-                fi
-              done
-              
-              if [ "$HAS_BREAKING_CHANGES" = true ]; then
-                # Increment major version due to breaking changes
+              # Check if merge commit has breaking changes
+              if echo "$MERGE_COMMIT_MSG" | grep -qiE "(BREAKING CHANGE:|^[^:]+!:|^[^(]+\([^)]*\)!:)"; then
+                # Breaking change detected - increment major version
                 IFS='.' read -ra RC_PARTS <<< "$RC_VERSION"
                 RC_MAJOR=${RC_PARTS[0]:-0}
                 RC_MINOR=${RC_PARTS[1]:-0}
@@ -757,16 +746,15 @@ jobs:
                 NEW_VERSION="$NEW_MAJOR.0.0"
                 NEW_TAG="v$NEW_VERSION"
                 
-                echo "🚀 BREAKING CHANGES DETECTED - Incrementing major version!"
-                echo "📋 Breaking changes found in:"
-                echo -e "$BREAKING_COMMITS"
+                echo "🚀 BREAKING CHANGE DETECTED in merge commit!"
+                echo "� Breaking change: $MERGE_COMMIT_MSG"
                 echo "✅ Bumping from $LATEST_RC_TAG to $NEW_TAG (major version increment)"
                 echo "💡 Production deployment will proceed with $NEW_TAG"
               else
-                # No breaking changes - just promote RC tag normally
+                # No breaking changes - just remove RC suffix
                 NEW_VERSION="$RC_VERSION"
                 NEW_TAG="v$NEW_VERSION"
-                echo "✅ No breaking changes detected"
+                echo "✅ No breaking changes detected in merge commit"
                 echo "✅ Promoting RC tag $LATEST_RC_TAG to production version: $NEW_TAG"
               fi
             else
@@ -866,10 +854,28 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
-          git push origin "$TAG_NAME"
-
-          echo "✅ Successfully created and pushed git tag: $TAG_NAME"
+          # Check if tag already exists
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ Tag $TAG_NAME already exists"
+            echo "🔍 Checking if it points to the current commit..."
+            
+            EXISTING_TAG_COMMIT=$(git rev-list -n 1 "$TAG_NAME")
+            CURRENT_COMMIT=$(git rev-parse HEAD)
+            
+            if [ "$EXISTING_TAG_COMMIT" = "$CURRENT_COMMIT" ]; then
+              echo "✅ Tag $TAG_NAME already points to current commit - no action needed"
+            else
+              echo "⚠️ Tag $TAG_NAME points to different commit, skipping tag creation"
+              echo "📋 Existing tag commit: $EXISTING_TAG_COMMIT"
+              echo "📋 Current commit: $CURRENT_COMMIT"
+              echo "💡 Tag creation skipped to avoid conflicts"
+            fi
+          else
+            # Create new tag
+            git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+            git push origin "$TAG_NAME"
+            echo "✅ Successfully created and pushed git tag: $TAG_NAME"
+          fi
 
       - name: Create GitHub Release
         if: ${{ !inputs.build_only && steps.push.outcome == 'success' }}
