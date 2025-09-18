@@ -87,45 +87,14 @@ jobs:
             SKIP_REASON="Manual trigger - build skipped by design"
             echo "⏭️ $SKIP_REASON"
 
-          # For pull requests, analyze all commits in the PR
+          # Skip if pull request - we only build after PR is merged, not during PR creation
           elif [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "🔍 Analyzing pull request commits..."
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-            
-            echo "📋 PR base: $BASE_SHA"
-            echo "📋 PR head: $HEAD_SHA"
-            
-            # Get all commits in the PR
-            COMMITS=$(git log --oneline ${BASE_SHA}..${HEAD_SHA})
-            echo "📋 Commits in PR:"
-            echo "$COMMITS"
-            
-            # Analyze commit messages for build-requiring changes
-            BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
-            FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
-            FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
-            BUILD_CHANGES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ (build|ci)" | wc -l)
-            
-            echo "📊 PR Change analysis:"
-            echo "  - Breaking changes: $BREAKING_CHANGES"
-            echo "  - Features: $FEATURES"
-            echo "  - Fixes: $FIXES"
-            echo "  - Build/CI changes: $BUILD_CHANGES"
-            
-            # Build is needed if there are features, fixes, breaking changes, or build changes
-            if [ "$BREAKING_CHANGES" -gt 0 ] || [ "$FEATURES" -gt 0 ] || [ "$FIXES" -gt 0 ] || [ "$BUILD_CHANGES" -gt 0 ]; then
-              BUILD_NEEDED="true"
-              echo "✅ Build needed - found changes requiring build in PR"
-            else
-              BUILD_NEEDED="false"
-              SKIP_REASON="No build-requiring changes found in PR (only docs, chore, style, test, etc.)"
-              echo "⏭️ $SKIP_REASON"
-            fi
-
-          # For push events, check target branches and commit messages
+            BUILD_NEEDED="false"
+            SKIP_REASON="Pull request - build skipped until PR is approved and merged"
+            echo "⏭️ $SKIP_REASON"
+          # For push events (including PR merges), check target branches and analyze commits
           elif [ "${{ github.event_name }}" == "push" ]; then
-            TARGET_BRANCHES="main|staging|production|develop|development"
+            TARGET_BRANCHES="main|staging|production|development"
             CURRENT_BRANCH="${{ github.ref_name }}"
             
             echo "📋 Current branch: $CURRENT_BRANCH"
@@ -134,34 +103,52 @@ jobs:
             # Check if pushing to target branch
             if [[ ! "$CURRENT_BRANCH" =~ ^($TARGET_BRANCHES)$ ]]; then
               BUILD_NEEDED="false"
-              SKIP_REASON="Not pushing to target branch ($CURRENT_BRANCH not in: main, staging, production, develop)"
+              SKIP_REASON="Not pushing to target branch ($CURRENT_BRANCH not in: main, staging, production, development)"
               echo "⏭️ $SKIP_REASON"
             else
-              # For staging/production branches, analyze commits since base branch
+              # For staging/production branches, always build (they use different versioning strategies)
               if [ "$CURRENT_BRANCH" == "staging" ]; then
-                # Staging always builds to create RC versions
                 echo "🔄 Staging branch detected - always build to create RC version"
                 BUILD_NEEDED="true"
                 
               elif [ "$CURRENT_BRANCH" == "production" ]; then
-                # Production always builds to promote RC versions
-                echo "� Production branch detected - always build to promote RC version"
+                echo "🚀 Production branch detected - always build to promote RC version"
                 BUILD_NEEDED="true"
                 
               else
-                # For main/develop, analyze commits since last tag or recent commits
+                # For main/development branches, analyze recent commits (including PR merges)
+                echo "🔍 Analyzing commits for build-requiring changes..."
+                
+                # Get recent commits since last tag, or last 10 commits if no tags
                 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
                 
                 if [ -n "$LAST_TAG" ]; then
                   COMMITS=$(git log ${LAST_TAG}..HEAD --oneline)
                   echo "📋 Commits since last tag ($LAST_TAG):"
                 else
-                  COMMITS=$(git log --oneline -10)  # Last 10 commits if no tags
+                  COMMITS=$(git log --oneline -10)
                   echo "📋 Recent commits (no tags found):"
                 fi
-                echo "$COMMITS"
                 
-                # Check for build-requiring changes in main/develop branches
+                # If this is a merge commit from a PR, also analyze the PR commits
+                LATEST_COMMIT=$(git log -1 --oneline)
+                if echo "$LATEST_COMMIT" | grep -q "Merge pull request"; then
+                  echo "🔍 Detected PR merge - analyzing PR commits..."
+                  MERGE_COMMIT=$(echo "$LATEST_COMMIT" | cut -d' ' -f1)
+                  PR_COMMITS=$(git log ${MERGE_COMMIT}^1..${MERGE_COMMIT}^2 --oneline 2>/dev/null || echo "")
+                  if [ -n "$PR_COMMITS" ]; then
+                    echo "📋 PR commits being merged:"
+                    echo "$PR_COMMITS"
+                    # Use PR commits for analysis
+                    COMMITS="$PR_COMMITS"
+                  fi
+                fi
+                
+                echo "📋 Analyzing commits:"
+                echo "$COMMITS"
+                  echo "📋 Commits since last tag ($LAST_TAG):"
+                
+                # Analyze commit messages for build-requiring changes
                 BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
                 FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
                 FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
@@ -169,7 +156,7 @@ jobs:
                 
                 echo "📊 Change analysis:"
                 echo "  - Breaking changes: $BREAKING_CHANGES"
-                echo "  - Features: $FEATURES" 
+                echo "  - Features: $FEATURES"
                 echo "  - Fixes: $FIXES"
                 echo "  - Build/CI changes: $BUILD_CHANGES"
                 
@@ -182,32 +169,6 @@ jobs:
                   SKIP_REASON="No build-requiring changes found (only docs, chore, style, test, etc.)"
                   echo "⏭️ $SKIP_REASON"
                 fi
-              fi
-                  echo "📋 Recent commits (no tags found):"
-                fi
-                echo "$COMMITS"
-              fi
-              
-              # Check for build-requiring changes
-              BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
-              FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
-              FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
-              BUILD_CHANGES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ (build|ci)" | wc -l)
-              
-              echo "📊 Change analysis:"
-              echo "  - Breaking changes: $BREAKING_CHANGES"
-              echo "  - Features: $FEATURES"
-              echo "  - Fixes: $FIXES"
-              echo "  - Build/CI changes: $BUILD_CHANGES"
-              
-              # Build is needed if there are features, fixes, breaking changes, or build changes
-              if [ "$BREAKING_CHANGES" -gt 0 ] || [ "$FEATURES" -gt 0 ] || [ "$FIXES" -gt 0 ] || [ "$BUILD_CHANGES" -gt 0 ]; then
-                BUILD_NEEDED="true"
-                echo "✅ Build needed - found changes requiring build"
-              else
-                BUILD_NEEDED="false"
-                SKIP_REASON="No build-requiring changes found (only docs, chore, style, test, etc.)"
-                echo "⏭️ $SKIP_REASON"
               fi
             fi
           fi
@@ -665,65 +626,150 @@ jobs:
         if: ${{ !inputs.build_only && steps.build.outcome == 'success' }}
         id: version
         run: |
-          # Get the latest tag from git
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-
-          if [ -n "$LATEST_TAG" ]; then
-            CURRENT_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
-            echo "📋 Latest git tag: $LATEST_TAG (version: $CURRENT_VERSION)"
-          else
-            # No tags exist, start with default version
-            CURRENT_VERSION="0.0.0"
-            echo "📋 No git tags found, starting with default version: $CURRENT_VERSION"
-          fi
-
           # Handle branch-specific versioning strategies
           if [ "${{ github.ref_name }}" == "staging" ]; then
-            # Staging: Use latest tag + '-rc' (no version calculations)
-            echo "🔄 Staging branch detected - using latest tag with RC suffix"
-            if [ -n "$LATEST_TAG" ]; then
-              # Remove any existing -rc suffix and add new one
-              BASE_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//' | sed 's/-rc$//')
-              NEW_VERSION="$BASE_VERSION-rc"
-            else
-              NEW_VERSION="0.1.0-rc"
-              echo "📋 No existing tags, starting with 0.1.0-rc"
+            # Staging: Extract latest tag from merged PR commits
+            echo "🔄 Staging branch detected - extracting latest tag from merged PR"
+            
+            # Find the merge commit (should be the HEAD)
+            MERGE_COMMIT=$(git rev-parse HEAD)
+            echo "📋 Merge commit: $MERGE_COMMIT"
+            
+            # Get the PR commits (commits from the feature branch that was merged)
+            # Get the two parents of the merge commit
+            FIRST_PARENT=$(git rev-parse HEAD^1)   # Main/staging branch
+            SECOND_PARENT=$(git rev-parse HEAD^2)  # Feature branch
+            
+            # Get commits from the feature branch (second parent to merge base)
+            MERGE_BASE=$(git merge-base $FIRST_PARENT $SECOND_PARENT)
+            PR_COMMITS=$(git log --format="%H" $MERGE_BASE..$SECOND_PARENT)
+            
+            if [ -z "$PR_COMMITS" ]; then
+              echo "⚠️ No PR commits found, using current HEAD"
+              PR_COMMITS="$MERGE_COMMIT"
             fi
-            NEW_TAG="v$NEW_VERSION"
+            
+            echo "📋 PR commits to check for tags:"
+            echo "$PR_COMMITS"
+            
+            # Find tags attached to any of the PR commits
+            LATEST_TAG=""
+            LATEST_TAG_COMMIT=""
+            
+            for commit in $PR_COMMITS; do
+              # Check if this commit has any tags
+              COMMIT_TAGS=$(git tag --points-at $commit)
+              if [ -n "$COMMIT_TAGS" ]; then
+                echo "📋 Found tags on commit $commit: $COMMIT_TAGS"
+                for tag in $COMMIT_TAGS; do
+                  if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    echo "📋 Valid version tag found: $tag"
+                    if [ -z "$LATEST_TAG" ] || [ "$(printf '%s\n%s\n' "$LATEST_TAG" "$tag" | sort -V | tail -n1)" = "$tag" ]; then
+                      LATEST_TAG="$tag"
+                      LATEST_TAG_COMMIT="$commit"
+                    fi
+                  fi
+                done
+              fi
+            done
+            
+            if [ -n "$LATEST_TAG" ]; then
+              # Use the latest tag found in PR commits and add -rc suffix
+              BASE_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
+              NEW_VERSION="$BASE_VERSION-rc"
+              NEW_TAG="v$NEW_VERSION"
+              echo "✅ Using tag $LATEST_TAG from PR commit $LATEST_TAG_COMMIT"
+              echo "✅ Creating RC version: $NEW_TAG"
+            else
+              echo "❌ No version tags found in merged PR commits"
+              echo "💡 Please ensure the PR includes commits with proper version tags"
+              exit 1
+            fi
             
           elif [ "${{ github.ref_name }}" == "production" ]; then
-            # Production: Find latest RC tag and promote it (no calculations)
-            echo "🚀 Production branch detected - looking for latest RC tag to promote"
+            # Production: Extract latest tag from merged PR commits (should be RC tag)
+            echo "🚀 Production branch detected - extracting latest RC tag from merged PR"
             
-            # Find the latest RC tag
-            LATEST_RC_TAG=$(git tag -l "v*-rc" | sort -V | tail -n1)
+            # Find the merge commit (should be the HEAD)
+            MERGE_COMMIT=$(git rev-parse HEAD)
+            echo "📋 Merge commit: $MERGE_COMMIT"
             
-            if [ -z "$LATEST_RC_TAG" ]; then
-              echo "❌ No RC tags found for production promotion"
-              echo "💡 Deploy to staging first to create an RC tag"
-              exit 1
+            # Get the PR commits (commits from the staging branch that was merged)
+            FIRST_PARENT=$(git rev-parse HEAD^1)   # Production branch
+            SECOND_PARENT=$(git rev-parse HEAD^2)  # Staging branch
+            
+            # Get commits from the staging branch
+            MERGE_BASE=$(git merge-base $FIRST_PARENT $SECOND_PARENT)
+            PR_COMMITS=$(git log --format="%H" $MERGE_BASE..$SECOND_PARENT)
+            
+            if [ -z "$PR_COMMITS" ]; then
+              echo "⚠️ No PR commits found, using current HEAD"
+              PR_COMMITS="$MERGE_COMMIT"
             fi
             
-            # Extract base version from RC tag and check if it's v1.x.x+
-            RC_VERSION=$(echo "$LATEST_RC_TAG" | sed 's/^v//' | sed 's/-rc$//')
-            IFS='.' read -ra RC_PARTS <<< "$RC_VERSION"
-            RC_MAJOR=${RC_PARTS[0]:-0}
+            echo "📋 PR commits to check for RC tags:"
+            echo "$PR_COMMITS"
             
-            if [ "$RC_MAJOR" -eq 0 ]; then
-              echo "❌ Production deployment blocked: Cannot deploy v0.x.x versions to production"
-              echo "� Found RC tag: $LATEST_RC_TAG (v0.x.x not allowed in production)"
-              echo "💡 Versions must be v1.x.x or higher for production deployment"
-              echo "📋 This restriction exists because we're still in v0.x.x development phase"
+            # Find RC tags attached to any of the PR commits
+            LATEST_RC_TAG=""
+            LATEST_RC_TAG_COMMIT=""
+            
+            for commit in $PR_COMMITS; do
+              COMMIT_TAGS=$(git tag --points-at $commit)
+              if [ -n "$COMMIT_TAGS" ]; then
+                echo "� Found tags on commit $commit: $COMMIT_TAGS"
+                for tag in $COMMIT_TAGS; do
+                  if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc$ ]]; then
+                    echo "📋 Valid RC tag found: $tag"
+                    if [ -z "$LATEST_RC_TAG" ] || [ "$(printf '%s\n%s\n' "$LATEST_RC_TAG" "$tag" | sort -V | tail -n1)" = "$tag" ]; then
+                      LATEST_RC_TAG="$tag"
+                      LATEST_RC_TAG_COMMIT="$commit"
+                    fi
+                  fi
+                done
+              fi
+            done
+            
+            if [ -n "$LATEST_RC_TAG" ]; then
+              # Promote RC tag to production (remove -rc suffix)
+              RC_VERSION=$(echo "$LATEST_RC_TAG" | sed 's/^v//' | sed 's/-rc$//')
+              
+              # Check if it's v1.x.x or higher
+              IFS='.' read -ra RC_PARTS <<< "$RC_VERSION"
+              RC_MAJOR=${RC_PARTS[0]:-0}
+              
+              if [ "$RC_MAJOR" -eq 0 ]; then
+                echo "❌ Production deployment blocked: Cannot deploy v0.x.x versions to production"
+                echo "📋 Found RC tag: $LATEST_RC_TAG (v0.x.x not allowed in production)"
+                echo "💡 Versions must be v1.x.x or higher for production deployment"
+                exit 1
+              fi
+              
+              NEW_VERSION="$RC_VERSION"
+              NEW_TAG="v$NEW_VERSION"
+              echo "✅ Using RC tag $LATEST_RC_TAG from PR commit $LATEST_RC_TAG_COMMIT"
+              echo "✅ Promoting to production version: $NEW_TAG"
+            else
+              echo "❌ No RC tags found in merged PR commits"
+              echo "💡 Please ensure the PR from staging includes RC tags"
               exit 1
             fi
-            
-            NEW_VERSION="$RC_VERSION"
-            NEW_TAG="v$NEW_VERSION"
-            echo "✅ Promoting RC tag $LATEST_RC_TAG to production version $NEW_TAG"
             
           else
-            # Development/main branches: Calculate new versions
-            echo "� Development branch detected - calculating new version"
+            # Development/main branches: Calculate new versions based on commit analysis
+            echo "📊 Development branch detected - calculating new version based on commits"
+            
+            # Get the latest tag from git
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+            if [ -n "$LATEST_TAG" ]; then
+              CURRENT_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
+              echo "📋 Latest git tag: $LATEST_TAG (version: $CURRENT_VERSION)"
+            else
+              # No tags exist, start with default version
+              CURRENT_VERSION="0.0.0"
+              echo "📋 No git tags found, starting with default version: $CURRENT_VERSION"
+            fi
             
             # Parse version components
             IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
@@ -762,7 +808,7 @@ jobs:
             fi
           fi
 
-          echo "🏷️ Calculated new version: $NEW_VERSION (bump: $BUMP_TYPE)"
+          echo "🏷️ Calculated new version: $NEW_VERSION"
           echo "🏷️ New tag will be: $NEW_TAG"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
