@@ -94,7 +94,7 @@ jobs:
             echo "⏭️ $SKIP_REASON"
           # For push events (including PR merges), check target branches and analyze commits
           elif [ "${{ github.event_name }}" == "push" ]; then
-            TARGET_BRANCHES="main|staging|production|development"
+            TARGET_BRANCHES="development|staging|production"
             CURRENT_BRANCH="${{ github.ref_name }}"
             
             echo "📋 Current branch: $CURRENT_BRANCH"
@@ -103,7 +103,7 @@ jobs:
             # Check if pushing to target branch
             if [[ ! "$CURRENT_BRANCH" =~ ^($TARGET_BRANCHES)$ ]]; then
               BUILD_NEEDED="false"
-              SKIP_REASON="Not pushing to target branch ($CURRENT_BRANCH not in: main, staging, production, development)"
+              SKIP_REASON="Not pushing to target branch ($CURRENT_BRANCH not in: development, staging, production)"
               echo "⏭️ $SKIP_REASON"
             else
               # For staging/production branches, always build (they use different versioning strategies)
@@ -116,7 +116,7 @@ jobs:
                 BUILD_NEEDED="true"
                 
               else
-                # For main/development branches, analyze recent commits (including PR merges)
+                # For development branches, analyze recent commits (including PR merges)
                 echo "🔍 Analyzing commits for build-requiring changes..."
                 
                 # Get recent commits since last tag, or last 10 commits if no tags
@@ -637,7 +637,7 @@ jobs:
             
             # Get the PR commits (commits from the feature branch that was merged)
             # Get the two parents of the merge commit
-            FIRST_PARENT=$(git rev-parse HEAD^1)   # Main/staging branch
+            FIRST_PARENT=$(git rev-parse HEAD^1)   # Development/staging branch
             SECOND_PARENT=$(git rev-parse HEAD^2)  # Feature branch
             
             # Get commits from the feature branch (second parent to merge base)
@@ -756,7 +756,7 @@ jobs:
             fi
             
           else
-            # Development/main branches: Calculate new versions based on commit analysis
+            # Development branches: Calculate new versions based on commit analysis
             echo "📊 Development branch detected - calculating new version based on commits"
             
             # Get the latest tag from git
@@ -953,7 +953,7 @@ jobs:
             echo "📝 **Reason**: $SKIP_REASON" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "💡 **What triggers a build?**" >> $GITHUB_STEP_SUMMARY
-            echo "- Push to main/staging/production branches" >> $GITHUB_STEP_SUMMARY
+            echo "- Push to development/staging/production branches" >> $GITHUB_STEP_SUMMARY
             echo "- Commit messages with: feat:, fix:, BREAKING CHANGE, build:, ci:" >> $GITHUB_STEP_SUMMARY
             echo "- NOT manual triggers or pull requests" >> $GITHUB_STEP_SUMMARY
           fi
