@@ -26,7 +26,7 @@ const eslintConfig = [
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": "error",
 
-      // Prevent warning comments like TODO, FIXME to ensure clean code
+            // Prevent warning comments to ensure clean code
       "no-warning-comments": [
         "error",
         {
