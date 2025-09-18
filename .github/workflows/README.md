@@ -203,7 +203,7 @@ git commit -m "feat!: redesign authentication system"
 
 ### Branch-Specific Versioning Strategy
 
-Our versioning strategy is designed around a **v0.x.x development phase** where we're still building core features. Production deployments are restricted to stable v1.x.x+ versions only.
+Our versioning strategy implements **intelligent semantic versioning** with automated breaking change detection and flexible version promotion across all environments.
 
 #### Development Branches (development, feature branches, etc.)
 
@@ -222,50 +222,206 @@ Our versioning strategy is designed around a **v0.x.x development phase** where 
   - Latest tag `v0.2.3` → Creates `v0.2.3-rc`
   - If no tags exist → Creates `v0.1.0-rc`
 
-#### Production Branch
+#### Production Branch - Intelligent Version Promotion
 
-- **Strategy**: Promotes latest RC tag to final version
-- **Logic**: Finds the latest `-rc` tag and removes the suffix
-- **Restrictions**:
-  - ❌ **v0.x.x versions are BLOCKED from production**
-  - ✅ Only v1.x.x+ versions can be deployed to production
-  - Must have an existing RC tag to promote
+- **Strategy**: Smart RC tag promotion with automated breaking change detection
+- **Logic**: Analyzes merged PR commits for breaking changes and automatically increments versions
+- **Flexibility**: Supports all version ranges (v0.x.x, v1.x.x+) with intelligent major version bumping
 
-#### v0.x.x Production Restriction
+## 🧠 Intelligent Versioning System
 
-**Why This Restriction Exists:**
+### Breaking Change Detection Engine
 
-- v0.x.x indicates **development/beta phase**
-- Production should only receive **stable releases** (v1.x.x+)
-- Prevents accidental deployment of unstable features
+Our production deployment system includes a sophisticated **breaking change analysis engine** that automatically detects breaking changes in merged PR commits and intelligently manages version promotion.
 
-**Error Messages:**
+#### How It Works
+
+1. **RC Tag Discovery**: Finds the latest `-rc` tag from staging deployments
+2. **PR Commit Analysis**: Analyzes all commits in the merged pull request
+3. **Breaking Change Detection**: Scans commit messages for breaking change patterns
+4. **Intelligent Version Bumping**: Automatically increments major version when breaking changes are detected
+
+#### Breaking Change Detection Patterns
+
+The system recognizes breaking changes through multiple conventional commit patterns:
 
 ```bash
-# No RC Tag for Production
+# Type with exclamation mark (breaking change)
+feat!: redesign user authentication system
+fix!: remove deprecated API endpoints
+refactor!: change database schema structure
+
+# Type with scope and exclamation mark
+feat(auth)!: implement new OAuth flow
+fix(api)!: update response format structure
+
+# BREAKING CHANGE in commit body/footer
+feat: add new user roles
+
+BREAKING CHANGE: User permissions now require explicit role assignment
+```
+
+#### Intelligent Version Promotion Logic
+
+**Scenario 1: No Breaking Changes Detected**
+
+```bash
+# RC Tag: v0.5.2-rc
+# Merged Commits: feat: add user preferences, fix: resolve login bug
+# Result: v0.5.2 (normal RC promotion)
+
+✅ No breaking changes detected
+✅ Promoting RC tag v0.5.2-rc to production version: v0.5.2
+```
+
+**Scenario 2: Breaking Changes Detected**
+
+```bash
+# RC Tag: v0.5.2-rc
+# Merged Commits: feat: add preferences, feat!: redesign auth system
+# Result: v1.0.0 (automatic major version bump)
+
+🚀 BREAKING CHANGES DETECTED - Incrementing major version!
+📋 Breaking changes found in:
+  - abc123: feat!: redesign auth system
+✅ Bumping from v0.5.2-rc to v1.0.0 (major version increment)
+```
+
+**Scenario 3: Already v1.x.x+ with Breaking Changes**
+
+```bash
+# RC Tag: v1.2.0-rc
+# Merged Commits: feat!: remove legacy endpoints
+# Result: v2.0.0 (major version increment)
+
+🚀 BREAKING CHANGES DETECTED - Incrementing major version!
+✅ Bumping from v1.2.0-rc to v2.0.0 (major version increment)
+```
+
+#### Version Promotion Examples
+
+| RC Tag      | Breaking Changes     | Final Version | Reasoning              |
+| ----------- | -------------------- | ------------- | ---------------------- |
+| `v0.1.0-rc` | None                 | `v0.1.0`      | Normal promotion       |
+| `v0.1.0-rc` | `feat!: new API`     | `v1.0.0`      | Auto-promote to stable |
+| `v0.9.5-rc` | `fix!: breaking fix` | `v1.0.0`      | Auto-promote to stable |
+| `v1.2.0-rc` | None                 | `v1.2.0`      | Normal promotion       |
+| `v1.2.0-rc` | `BREAKING CHANGE`    | `v2.0.0`      | Major version bump     |
+| `v2.1.0-rc` | `feat!: redesign`    | `v3.0.0`      | Major version bump     |
+
+### Production Deployment Process
+
+#### 1. RC Tag Analysis
+
+```bash
+📋 Found RC tag: v0.5.2-rc
+🔍 Analyzing merged PR commits for breaking changes...
+```
+
+#### 2. Commit Message Scanning
+
+```bash
+# Scanning each commit in the merged PR
+Commit abc123: feat: add user dashboard → No breaking changes
+Commit def456: fix!: remove deprecated endpoints → ⚠️ Breaking change detected!
+Commit ghi789: docs: update API documentation → No breaking changes
+```
+
+#### 3. Breaking Change Assessment
+
+```bash
+💥 Breaking change detected in def456: fix!: remove deprecated endpoints
+🚀 BREAKING CHANGES DETECTED - Incrementing major version!
+📋 Breaking changes found in:
+  - def456: fix!: remove deprecated endpoints
+```
+
+#### 4. Intelligent Version Calculation
+
+```bash
+# Original RC version: 0.5.2
+# Breaking changes detected: YES
+# Action: Increment major version
+# Result: 1.0.0
+
+✅ Bumping from v0.5.2-rc to v1.0.0 (major version increment)
+💡 Production deployment will proceed with v1.0.0
+```
+
+### Benefits of Intelligent Versioning
+
+#### 🎯 **Automated Semantic Versioning**
+
+- No manual version management required
+- Follows semantic versioning specification strictly
+- Prevents human errors in version numbering
+
+#### 🛡️ **Breaking Change Safety**
+
+- Automatically identifies potentially breaking changes
+- Ensures major version bumps for breaking changes
+- Maintains backward compatibility awareness
+
+#### 🚀 **Flexible Deployment Strategy**
+
+- Supports all version ranges (v0.x.x, v1.x.x+)
+- Intelligent promotion based on change significance
+- Seamless transition from development to stable versions
+
+#### 📊 **Clear Audit Trail**
+
+- Detailed logging of version promotion decisions
+- Tracks which commits triggered major version bumps
+- Provides transparency in version management
+
+### Configuration & Customization
+
+#### Environment Variables
+
+```bash
+# No configuration required - fully automated
+# Breaking change patterns are built into the system
+# Version calculation follows conventional commits specification
+```
+
+#### Supported Conventional Commit Types
+
+```bash
+# Breaking change indicators
+feat!:           # Feature with breaking change
+fix!:            # Fix with breaking change
+refactor!:       # Refactoring with breaking change
+type(scope)!:    # Any type with scope and breaking change
+BREAKING CHANGE: # Explicit breaking change in body/footer
+```
+
+#### Error Handling & Fallbacks
+
+```bash
+# No RC Tag Found
 ❌ No RC tags found for production promotion
 💡 Deploy to staging first to create an RC tag
 
-# v0.x.x Production Block
-❌ Production deployment blocked: Cannot deploy v0.x.x versions to production
-🚫 Found RC tag: v0.2.3-rc (v0.x.x not allowed in production)
-💡 Versions must be v1.x.x or higher for production deployment
-📋 This restriction exists because we're still in v0.x.x development phase
+# Git Analysis Failures
+⚠️ Unable to analyze some commits - proceeding with normal promotion
+📋 Manual review recommended for version v1.2.0
+
+# Multiple Breaking Changes
+🚀 Multiple breaking changes detected across 3 commits
+📋 All breaking changes will trigger single major version increment
 ```
 
-**Workflow Examples:**
+### Workflow Integration
 
-_Typical Development Flow:_
+The intelligent versioning system is seamlessly integrated into the production deployment workflow:
 
-1. **Feature Development** (development branch): `v0.2.0` + `feat:` → `v0.3.0`
-2. **Staging Deployment** (staging branch): Latest tag `v0.3.0` → `v0.3.0-rc`
-3. **Production Deployment** (production branch): ❌ BLOCKED - v0.x.x not allowed
+1. **Trigger**: Production branch push or manual deployment
+2. **Analysis**: Automatic RC tag discovery and commit analysis
+3. **Decision**: Breaking change detection and version calculation
+4. **Action**: Tag creation, image building, and deployment
+5. **Notification**: Slack notification with version promotion details
 
-_First Production Release Flow:_
-
-1. **Major Release** (development branch): `v0.9.0` + `BREAKING CHANGE` → `v1.0.0`
-2. **Staging Deployment** (staging branch): Latest tag `v1.0.0` → `v1.0.0-rc`
-3. **Production Deployment** (production branch): ✅ SUCCESS - `v1.0.0` deployed
+This system ensures that semantic versioning is maintained automatically while providing the flexibility to deploy any version to production when appropriate, with intelligent handling of breaking changes across the entire version spectrum.
 
 ## 📊 Monitoring & Observability
 

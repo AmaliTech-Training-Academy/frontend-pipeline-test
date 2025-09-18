@@ -149,10 +149,10 @@ jobs:
                   echo "📋 Commits since last tag ($LAST_TAG):"
                 
                 # Analyze commit messages for build-requiring changes
-                BREAKING_CHANGES=$(echo "$COMMITS" | grep -i "BREAKING CHANGE\|!" | wc -l)
-                FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat" | wc -l)
-                FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix" | wc -l)
-                BUILD_CHANGES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ (build|ci)" | wc -l)
+                BREAKING_CHANGES=$(echo "$COMMITS" | grep -iE "(BREAKING CHANGE:|^[a-f0-9]+ [^:]+!:|^[a-f0-9]+ [^(]+\([^)]*\)!:)" | wc -l)
+                FEATURES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ feat(\([^)]*\))?:" | wc -l)
+                FIXES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ fix(\([^)]*\))?:" | wc -l)
+                BUILD_CHANGES=$(echo "$COMMITS" | grep -E "^[a-f0-9]+ (build|ci|perf|refactor)(\([^)]*\))?:" | wc -l)
                 
                 echo "📊 Change analysis:"
                 echo "  - Breaking changes: $BREAKING_CHANGES"
@@ -474,29 +474,21 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          platforms: linux/amd64
-
       - name: Build Docker image
         id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          # Use single platform for local builds to enable image loading and scanning
-          # Multi-platform builds with push:false don't load into local Docker daemon
-          platforms: linux/amd64
-          push: false
-          load: true # Required for Trivy to access the built image locally
-          tags: cloudinsight-frontend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
+        run: |
+          echo "🐳 Building Docker image..."
+
+          # Build image with standard Docker build
+          docker build \
+            --tag cloudinsight-frontend:${{ github.sha }} \
+            --build-arg NODE_ENV=production \
+            --build-arg COMMIT_SHA=${{ github.sha }} \
             ${{ steps.extract-env.outputs.has_next_public_vars == 'true' && 
-                format('BUILDTIME_ENV_FILE={0}', 'next-public-build-args.txt') || '' }}
-            NODE_ENV=production
-            COMMIT_SHA=${{ github.sha }}
+                format('--build-arg BUILDTIME_ENV_FILE={0}', 'next-public-build-args.txt') || '' }} \
+            .
+
+          echo "✅ Docker image built successfully: cloudinsight-frontend:${{ github.sha }}"
 
       - name: Run Trivy vulnerability scanner on image
         uses: aquasecurity/trivy-action@master
@@ -584,8 +576,8 @@ jobs:
             
             echo "🔍 Analyzing: $commit"
             
-            # Check for breaking changes (BREAKING CHANGE or ! in type)
-            if echo "$commit" | grep -qiE "(BREAKING CHANGE|^[^:]+!:|^[^(]+\([^)]*\)!:)"; then
+            # Check for breaking changes (BREAKING CHANGE: or type!: patterns only)
+            if echo "$commit" | grep -qiE "(BREAKING CHANGE:|^[^:]+!:|^[^(]+\([^)]*\)!:)"; then
               echo "  💥 Breaking change detected"
               BREAKING_CHANGES=$((BREAKING_CHANGES + 1))
             # Check for features
@@ -734,21 +726,49 @@ jobs:
               # Promote RC tag to production (remove -rc suffix)
               RC_VERSION=$(echo "$LATEST_RC_TAG" | sed 's/^v//' | sed 's/-rc$//')
               
-              # Check if it's v1.x.x or higher
-              IFS='.' read -ra RC_PARTS <<< "$RC_VERSION"
-              RC_MAJOR=${RC_PARTS[0]:-0}
+              echo "📋 Found RC tag: $LATEST_RC_TAG"
+              echo "🔍 Analyzing merged PR commits for breaking changes..."
               
-              if [ "$RC_MAJOR" -eq 0 ]; then
-                echo "❌ Production deployment blocked: Cannot deploy v0.x.x versions to production"
-                echo "📋 Found RC tag: $LATEST_RC_TAG (v0.x.x not allowed in production)"
-                echo "💡 Versions must be v1.x.x or higher for production deployment"
-                exit 1
+              # Analyze merged PR commits for breaking changes
+              HAS_BREAKING_CHANGES=false
+              BREAKING_COMMITS=""
+              
+              for commit in $PR_COMMITS; do
+                # Get commit message
+                COMMIT_MSG=$(git log --format=%s -n 1 $commit 2>/dev/null || echo "")
+                
+                # Check for breaking changes (BREAKING CHANGE: or type!: patterns)
+                if echo "$COMMIT_MSG" | grep -qiE "(BREAKING CHANGE:|^[^:]+!:|^[^(]+\([^)]*\)!:)"; then
+                  HAS_BREAKING_CHANGES=true
+                  BREAKING_COMMITS="$BREAKING_COMMITS\n  - $commit: $COMMIT_MSG"
+                  echo "  💥 Breaking change detected in $commit: $COMMIT_MSG"
+                fi
+              done
+              
+              if [ "$HAS_BREAKING_CHANGES" = true ]; then
+                # Increment major version due to breaking changes
+                IFS='.' read -ra RC_PARTS <<< "$RC_VERSION"
+                RC_MAJOR=${RC_PARTS[0]:-0}
+                RC_MINOR=${RC_PARTS[1]:-0}
+                RC_PATCH=${RC_PARTS[2]:-0}
+                
+                # Increment major version
+                NEW_MAJOR=$((RC_MAJOR + 1))
+                NEW_VERSION="$NEW_MAJOR.0.0"
+                NEW_TAG="v$NEW_VERSION"
+                
+                echo "🚀 BREAKING CHANGES DETECTED - Incrementing major version!"
+                echo "📋 Breaking changes found in:"
+                echo -e "$BREAKING_COMMITS"
+                echo "✅ Bumping from $LATEST_RC_TAG to $NEW_TAG (major version increment)"
+                echo "💡 Production deployment will proceed with $NEW_TAG"
+              else
+                # No breaking changes - just promote RC tag normally
+                NEW_VERSION="$RC_VERSION"
+                NEW_TAG="v$NEW_VERSION"
+                echo "✅ No breaking changes detected"
+                echo "✅ Promoting RC tag $LATEST_RC_TAG to production version: $NEW_TAG"
               fi
-              
-              NEW_VERSION="$RC_VERSION"
-              NEW_TAG="v$NEW_VERSION"
-              echo "✅ Using RC tag $LATEST_RC_TAG from PR commit $LATEST_RC_TAG_COMMIT"
-              echo "✅ Promoting to production version: $NEW_TAG"
             else
               echo "❌ No RC tags found in merged PR commits"
               echo "💡 Please ensure the PR from staging includes RC tags"
