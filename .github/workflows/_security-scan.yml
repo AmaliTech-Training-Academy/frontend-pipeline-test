@@ -345,38 +345,17 @@ jobs:
           category: "/language:${{ inputs.project_type == 'frontend' && 'javascript' || 'java' }}"
           upload: true
 
-      # Enhanced SonarQube Analysis
-      - name: Create SonarQube project properties
+      # Enhanced SonarQube Analysis (uses existing sonar-project.properties)
+      - name: Verify SonarQube configuration
         if: inputs.scan_code
         run: |
-          # Ensure sonar-project.properties exists with comprehensive settings
-          cat > sonar-project.properties << 'EOF'
-          # SonarQube Project Configuration
-          sonar.projectKey=${{ inputs.sonar_project_key || github.repository }}
-          sonar.organization=amalitech-training-academy
-          sonar.projectName=${{ github.repository }}
-          sonar.projectVersion=${{ github.sha }}
-
-          # Source settings
-          sonar.sources=src,app,components,lib,utils,hooks,services
-          sonar.tests=__tests__,**/*.test.*,**/*.spec.*
-          sonar.exclusions=**/.github/**,**/node_modules/**,**/dist/**,**/build/**,**/*.min.js
-          sonar.test.exclusions=**/.github/**,**/node_modules/**,**/dist/**,**/build/**
-
-          # Language settings
-          sonar.javascript.lcov.reportPaths=coverage/lcov.info
-          sonar.typescript.lcov.reportPaths=coverage/lcov.info
-          sonar.testExecutionReportPaths=coverage/test-report.xml
-
-          # Security settings
-          sonar.security.review.cwe=true
-          sonar.security.review.owasp=true
-          sonar.security.hotspots.inheritance=true
-
-          # Quality settings
-          sonar.qualitygate.wait=true
-          sonar.qualitygate.timeout=300
-          EOF
+          if [ -f sonar-project.properties ]; then
+            echo "✅ Using existing SonarQube configuration"
+            echo "📋 Current configuration:"
+            cat sonar-project.properties
+          else
+            echo "⚠️ No sonar-project.properties found. SonarQube scan may use default settings."
+          fi
 
       - name: SonarQube Scan
         id: sonar-scan
