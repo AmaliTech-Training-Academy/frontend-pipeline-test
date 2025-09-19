@@ -878,21 +878,60 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        if: ${{ !inputs.build_only && steps.push.outcome == 'success' }}
-        uses: actions/create-release@v1
+        if: ${{ !inputs.build_only && steps.push.outcome == 'success' && github.ref_name == 'production' }}
+        run: |
+          TAG_NAME="v${{ steps.version.outputs.new_version }}"
+          RELEASE_NAME="Release v${{ steps.version.outputs.new_version }}"
+
+          echo "� Creating GitHub release for production deployment..."
+          echo "�🔍 Checking if release $TAG_NAME already exists..."
+
+          # Create release using GitHub API - fail if already exists
+          RELEASE_BODY="CloudInsight Frontend Release v${{ steps.version.outputs.new_version }}
+
+          🐳 **Container Image:** ${{ steps.push.outputs.image_uri }}
+          📝 **Commit:** ${{ github.sha }}
+          🔄 **Bump Type:** ${{ steps.analyze-commits.outputs.suggested_bump }}
+
+          ## Production Deployment
+          This release represents a stable production deployment of the CloudInsight Frontend application."
+
+          RELEASE_RESPONSE=$(curl -s \
+            -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases" \
+            -d @- <<EOF
+          {
+            "tag_name": "$TAG_NAME",
+            "name": "$RELEASE_NAME",
+            "body": $(echo "$RELEASE_BODY" | jq -Rs .),
+            "draft": false,
+            "prerelease": false
+          }
+          EOF
+          )
+
+          if echo "$RELEASE_RESPONSE" | jq -e '.id' > /dev/null; then
+            echo "✅ Successfully created GitHub release: $TAG_NAME"
+            RELEASE_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.html_url')
+            echo "🔗 Release URL: $RELEASE_URL"
+          else
+            echo "❌ Failed to create GitHub release"
+            echo "📋 Response: $RELEASE_RESPONSE"
+            
+            # Check if it's because release already exists
+            if echo "$RELEASE_RESPONSE" | jq -e '.errors[]? | select(.code == "already_exists")' > /dev/null; then
+              echo "💥 ERROR: Release $TAG_NAME already exists!"
+              echo "� Production releases must be unique"
+              exit 1
+            else
+              echo "💥 ERROR: Unexpected API error"
+              exit 1
+            fi
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ steps.version.outputs.new_version }}
-          release_name: Release v${{ steps.version.outputs.new_version }}
-          body: |
-            CloudInsight Frontend Release v${{ steps.version.outputs.new_version }}
-
-            🐳 **Container Image:** ${{ steps.push.outputs.image_uri }}
-            📝 **Commit:** ${{ github.sha }}
-            🔄 **Bump Type:** ${{ steps.analyze-commits.outputs.suggested_bump }}
-          draft: false
-          prerelease: false
 
       - name: Build and deployment summary
         if: always()
