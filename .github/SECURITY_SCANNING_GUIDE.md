@@ -44,16 +44,13 @@ I've created an enhanced security workflow (`_security-scan-enhanced.yml`) that 
 
 ### Migration Steps
 
-#### Step 1: Replace Current Security Workflow
+#### Step 1: Use Enhanced Security Workflow
 
-Replace your current `_security-scan.yml` with the enhanced version:
+The enhanced security workflow has replaced the original `_security-scan.yml` file with improved features:
 
 ```bash
-# Backup current workflow
-mv .github/workflows/_security-scan.yml .github/workflows/_security-scan.yml.backup
-
-# Use the enhanced version
-mv .github/workflows/_security-scan-enhanced.yml .github/workflows/_security-scan.yml
+# The enhanced workflow is now the main security scan workflow
+# No manual migration needed - just use the updated workflow
 ```
 
 #### Step 2: Update Workflow Caller
