@@ -295,25 +295,17 @@ jobs:
           category: "trivy-fs-scan"
 
       # Enhanced CodeQL Analysis
-      - name: Initialize CodeQL
-        if: inputs.scan_code
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ inputs.project_type == 'frontend' && 'javascript' || 'java' }}
-          queries: security-extended,security-and-quality
-          config-file: ./.github/codeql/codeql-config.yml
-
       - name: Create CodeQL config
         if: inputs.scan_code
         run: |
           mkdir -p .github/codeql
           cat > .github/codeql/codeql-config.yml << 'EOF'
           name: "Security-focused CodeQL Configuration"
-
+          
           queries:
             - uses: security-extended
             - uses: security-and-quality
-
+          
           paths-ignore:
             - "**/.github/**"
             - "**/node_modules/**"
@@ -322,7 +314,7 @@ jobs:
             - "**/__tests__/**"
             - "**/*.test.*"
             - "**/*.spec.*"
-
+          
           paths:
             - "src/"
             - "app/"
@@ -332,6 +324,14 @@ jobs:
             - "hooks/"
             - "services/"
           EOF
+
+      - name: Initialize CodeQL
+        if: inputs.scan_code
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.project_type == 'frontend' && 'javascript' || 'java' }}
+          queries: security-extended,security-and-quality
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Autobuild
         if: inputs.scan_code
