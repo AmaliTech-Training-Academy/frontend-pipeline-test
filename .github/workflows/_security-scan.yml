@@ -43,11 +43,10 @@ on:
         value: ${{ jobs.security-scan.outputs.security_score }}
 
 permissions:
-  contents: read
-  security-events: write
-  actions: read
-  pull-requests: write
-  issues: write
+  contents: read           # Read repository content and history
+  security-events: write   # Upload SARIF results to GitHub Security tab
+  actions: read           # Read workflow run information
+  issues: write           # Create security issues for critical vulnerabilities
 
 jobs:
   security-scan:
@@ -717,5 +716,5 @@ jobs:
               **This issue was automatically created by the security scan workflow.**`,
               labels: ['security', 'critical', 'vulnerability']
             });
-
+            
             console.log(`Created security issue #${issue.data.number}`);

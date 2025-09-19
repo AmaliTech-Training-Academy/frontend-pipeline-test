@@ -24,11 +24,12 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  checks: write
-  actions: read
-  security-events: write
-  packages: write
+  contents: write        # Read/write repository content, create releases, push tags
+  checks: write          # Write status checks
+  actions: read          # Read workflow information
+  security-events: write # Upload security scan results to Security tab
+  packages: write        # Push to container registry
+  issues: write          # Create security issues for critical vulnerabilities
 
 concurrency:
   group: frontend-ci-${{ github.ref }}
