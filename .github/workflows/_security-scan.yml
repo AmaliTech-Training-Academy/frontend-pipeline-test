@@ -46,9 +46,9 @@ permissions:
 
 jobs:
   security-scan:
-    name: Security Scanning & Analysis
+    name: Lean Security Scanning & Analysis
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     outputs:
       dependency_scan_results: ${{ steps.dependency-scan.outputs.results }}
       sonar_quality_gate: ${{ steps.final-quality-gate.outputs.quality_gate }}
@@ -83,57 +83,29 @@ jobs:
             pnpm install --prefer-offline
           fi
 
-      # Dependency Vulnerability Scanning
-      - name: Dependency vulnerability scan
+      # Quick dependency vulnerability scan
+      - name: npm/pnpm audit (Quick dependency check)
         id: dependency-scan
-        if: inputs.scan_dependencies
+        if: inputs.scan_dependencies && inputs.project_type == 'frontend'
         run: |
-          echo "🔍 Scanning dependencies for vulnerabilities..."
-
-          # npm audit for Node.js projects
-          if [ "${{ inputs.project_type }}" == "frontend" ] && [ -f package.json ]; then
-            echo "Running npm audit..."
-            if pnpm audit --audit-level moderate --json > audit-results.json 2>/dev/null; then
-              echo "results=passed" >> $GITHUB_OUTPUT
-              echo "✅ No significant vulnerabilities found"
-            else
-              echo "results=failed" >> $GITHUB_OUTPUT
-              echo "❌ Vulnerabilities found in dependencies"
-              echo "📋 Audit results:"
-              cat audit-results.json | jq -r '.advisories // {} | to_entries[] | "- \(.value.title) (\(.value.severity))"' || echo "Failed to parse audit results"
-              
-              # Create GitHub Security Advisory
-              if command -v gh &> /dev/null && [ -n "${{ github.token }}" ]; then
-                echo "Creating security advisory..."
-                # gh api repos/${{ github.repository }}/security-advisories --input audit-results.json || true
-              fi
+          echo "🔍 Running quick dependency vulnerability scan..."
+          
+          if pnpm audit --audit-level moderate --json > audit-results.json 2>/dev/null; then
+            echo "✅ No significant vulnerabilities found in dependencies"
+            echo "results=passed" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Vulnerabilities found in dependencies"
+            echo "results=failed" >> $GITHUB_OUTPUT
+            
+            # Display summary
+            if [ -f audit-results.json ]; then
+              echo "📋 Vulnerability summary:"
+              cat audit-results.json | jq -r '.metadata.vulnerabilities | to_entries[] | "- \(.key): \(.value)"' 2>/dev/null || echo "Failed to parse audit results"
             fi
           fi
 
-          # OWASP Dependency Check
-          echo "Running OWASP Dependency Check..."
-          docker run --rm -v "$(pwd)":/src \
-            owasp/dependency-check:latest \
-            --scan /src \
-            --exclude "**/.github/**" \
-            --format JSON \
-            --format HTML \
-            --out /src/dependency-check-reports \
-            --suppression /src/.dependency-check-suppressions.xml 2>/dev/null || true
-
-          if [ -d dependency-check-reports ]; then
-            echo "📊 OWASP Dependency Check completed"
-            if [ -f dependency-check-reports/dependency-check-report.json ]; then
-              VULNERABILITIES=$(cat dependency-check-reports/dependency-check-report.json | jq '.dependencies[].vulnerabilities // [] | length' | awk '{sum+=$1} END {print sum+0}')
-              echo "Found $VULNERABILITIES vulnerabilities"
-              if [ "$VULNERABILITIES" -gt 0 ]; then
-                echo "::warning::Found $VULNERABILITIES vulnerabilities in dependencies"
-              fi
-            fi
-          fi
-
-      # Trivy Security Scanner
-      - name: Run Trivy vulnerability scanner
+      # Comprehensive vulnerability scanning with Trivy (REQUIRED)
+      - name: Trivy security scanner (Comprehensive scan)
         if: inputs.scan_dependencies
         uses: aquasecurity/trivy-action@master
         with:
@@ -142,43 +114,35 @@ jobs:
           format: "sarif"
           output: "trivy-results.sarif"
           severity: ${{ inputs.trivy_severity }}
-          exit-code: "0" # Don't fail the job
-          skip-dirs: ".github"
+          exit-code: "0"
+          skip-dirs: ".github,node_modules"
 
-      - name: Upload Trivy scan results
+      - name: Upload Trivy scan results to GitHub Security tab
         if: ${{ inputs.scan_dependencies && always() && hashFiles('trivy-results.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: "trivy-results.sarif"
+          category: "trivy-fs-scan"
 
-      # CodeQL Analysis
-      - name: Initialize CodeQL
+      # SonarQube Analysis (REQUIRED - comprehensive code quality & security)
+      - name: Verify SonarQube configuration
         if: inputs.scan_code
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ inputs.project_type == 'frontend' && 'javascript' || 'java' }}
-          queries: security-extended
+        run: |
+          if [ -f sonar-project.properties ]; then
+            echo "✅ Using existing SonarQube configuration"
+            echo "📋 Current configuration:"
+            cat sonar-project.properties
+          else
+            echo "⚠️ No sonar-project.properties found. SonarQube scan may use default settings."
+          fi
 
-      - name: Autobuild
-        if: inputs.scan_code
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
-        if: inputs.scan_code
-        id: code-scan
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{ inputs.project_type == 'frontend' && 'javascript' || 'java' }}"
-
-      # SonarQube Analysis
       - name: SonarQube Scan
         id: sonar-scan
         if: inputs.scan_code
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-          JAVA_OPTS: "-Dcom.sun.net.ssl.checkRevocation=false -Dtrust_all_cert=true -Dsonar.scanner.trustAllCerts=true"
 
       - name: Wait for SonarQube Quality Gate
         id: sonar-quality-gate
@@ -187,7 +151,6 @@ jobs:
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: Check SonarQube Quality Gate Result
         id: quality-gate-check
@@ -210,84 +173,48 @@ jobs:
           echo "::notice::SonarQube Quality Gate skipped"
           echo "quality_gate=SKIPPED" >> $GITHUB_OUTPUT
 
-      # Semgrep Static Analysis
-      - name: Create Semgrep ignore file
-        if: inputs.scan_code
-        run: |
-          echo ".github/" > .semgrepignore
-          echo "node_modules/" >> .semgrepignore
-
-      - name: Semgrep Static Analysis
-        if: inputs.scan_code
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            p/security-audit
-            p/owasp-top-ten
-            p/javascript
-
-      - name: Upload Semgrep results
-        if: ${{ inputs.scan_code && always() && hashFiles('semgrep.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep.sarif
-
-      # ESLint Security Rules (for frontend)
-      - name: ESLint Security Scan
-        if: ${{ inputs.project_type == 'frontend' && inputs.scan_code }}
-        run: |
-          echo "🔍 Running ESLint security scan..."
-
-          # Install eslint security plugins if not present
-          if ! grep -q "eslint-plugin-security" package.json; then
-            echo "Installing ESLint security plugins..."
-            pnpm add -D eslint-plugin-security
-          fi
-
-          # Run ESLint with security rules
-          pnpm exec eslint . \
-            --ext .js,.jsx,.ts,.tsx \
-            --ignore-path <(echo ".github/") \
-            --format json \
-            --output-file eslint-security-results.json \
-            --config '{"extends": ["plugin:security/recommended"]}' \
-            || true
-
-          if [ -f eslint-security-results.json ]; then
-            SECURITY_ISSUES=$(cat eslint-security-results.json | jq '[.[].messages[] | select(.ruleId | test("security"))] | length')
-            echo "Found $SECURITY_ISSUES security-related ESLint issues"
-            if [ "$SECURITY_ISSUES" -gt 0 ]; then
-              echo "::warning::Found $SECURITY_ISSUES security-related code issues"
-              echo "📋 Security issues found:"
-              cat eslint-security-results.json | jq -r '.[].messages[] | select(.ruleId | test("security")) | "- \(.ruleId): \(.message)"'
-            fi
-          fi
-
       # Security Summary
       - name: Security scan summary
         if: always()
         run: |
-          echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
-
-          if [ -f audit-results.json ]; then
-            echo "### Dependency Vulnerabilities" >> $GITHUB_STEP_SUMMARY
-            AUDIT_VULNS=$(cat audit-results.json | jq '.vulnerabilities // 0')
-            echo "- **npm audit:** $AUDIT_VULNS vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔒 Lean Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tools Used" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ inputs.scan_dependencies }}" == "true" ]; then
+            echo "- **npm/pnpm audit**: Quick dependency vulnerability check" >> $GITHUB_STEP_SUMMARY
+            echo "- **Trivy**: Comprehensive filesystem and dependency scanning" >> $GITHUB_STEP_SUMMARY
           fi
-
+          
+          if [ "${{ inputs.scan_code }}" == "true" ]; then
+            echo "- **SonarQube**: Code quality, security analysis, and quality gate" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.dependency-scan.outputs.results }}" == "failed" ]; then
+            echo "- **Dependency Audit**: ⚠️ Issues found (see artifacts)" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.dependency-scan.outputs.results }}" == "passed" ]; then
+            echo "- **Dependency Audit**: ✅ No issues" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           if [ -f trivy-results.sarif ]; then
-            echo "### Trivy Scan Results" >> $GITHUB_STEP_SUMMARY
-            TRIVY_ISSUES=$(cat trivy-results.sarif | jq '.runs[0].results | length')
-            echo "- **Trivy:** $TRIVY_ISSUES issues found" >> $GITHUB_STEP_SUMMARY
+            echo "- **Trivy Scan**: 📊 Results uploaded to Security tab" >> $GITHUB_STEP_SUMMARY
           fi
-
-          if [ -f eslint-security-results.json ]; then
-            echo "### Code Security Issues" >> $GITHUB_STEP_SUMMARY
-            ESLINT_SECURITY=$(cat eslint-security-results.json | jq '[.[].messages[] | select(.ruleId | test("security|node-security"))] | length')
-            echo "- **ESLint Security:** $ESLINT_SECURITY issues found" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.sonar-quality-gate.outputs.quality-gate-status }}" != "" ]; then
+            echo "- **SonarQube Quality Gate**: ${{ steps.sonar-quality-gate.outputs.quality-gate-status }}" >> $GITHUB_STEP_SUMMARY
           fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Why This Lean Approach?" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trivy**: Handles comprehensive vulnerability scanning" >> $GITHUB_STEP_SUMMARY
+          echo "- **SonarQube**: Covers code quality AND security analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- **npm audit**: Quick dependency check for immediate feedback" >> $GITHUB_STEP_SUMMARY
+          echo "- **No redundancy**: Each tool serves a unique purpose" >> $GITHUB_STEP_SUMMARY
 
-      # Upload Security Artifacts
+      # Upload Security Artifacts (lean set)
       - name: Upload security scan results
         if: always()
         uses: actions/upload-artifact@v4
@@ -295,10 +222,7 @@ jobs:
           name: security-scan-results-${{ github.run_id }}
           path: |
             audit-results.json
-            dependency-check-reports/
             trivy-results.sarif
-            semgrep.sarif
-            eslint-security-results.json
           if-no-files-found: ignore
           retention-days: 30
 
